@@ -73,6 +73,9 @@ try {
     : typeof input.prompt === "string" ? input.prompt : "").trim();
 
   // 1. Turn start time (only the time, never the text).
+  // Read the previous turn start BEFORE overwriting it, so the recap's "since"
+  // window covers the whole session, not just the instant /sundown:shutdown was typed.
+  const prevTurnStart = turnStart(input.session_id);
   recordTurnStart(input.session_id, date);
 
   // 2. State-changing commands. Plain stdout from this hook is added to Claude's
@@ -82,7 +85,7 @@ try {
     // Build the recap from REAL data (git log + diff + TOMORROW.md if present).
     // Session start is a good "since": commits made this working day usually
     // land after it. If we don't know, saveRecap falls back to the last 12h.
-    saveRecap({ projectDir: projectDir(input), since: turnStart(input.session_id) || date, date });
+    saveRecap({ projectDir: projectDir(input), since: prevTurnStart || new Date(date.getTime() - 12 * 3600 * 1000), date });
     logEvent("shutdown");
     console.log(
       `Sundown: the shutdown lock is now ON until ${hhmm(new Date(lock.until))}. ` +
