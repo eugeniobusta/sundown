@@ -20,162 +20,255 @@
 //
 // No shell is ever spawned and no network is used except by test-push.
 
+// Node built-ins only, no dependencies. crypto makes the random push topic, fs/path/os
+// read and write the Claude settings file, and fileURLToPath finds this script's own path.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+// Shared logic lives in lib.mjs so the hooks and this command agree on the rules.
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
   nextCutoffAfter, reasonText, dayAndTime, DEFAULTS,
 } from "../scripts/lib.mjs";
+// Builds the evening report text.
 import { buildReport } from "../scripts/report.mjs";
+// Sends the phone notification (used only by test-push).
 import { send } from "../scripts/push.mjs";
 
+// First CLI word is the command ("help" if none); the rest are its arguments. slice(2) skips "node" and the script path.
 const [command = "help", ...args] = process.argv.slice(2);
+// Read the saved settings once, with defaults filled in for anything unset.
 const cfg = readConfig();
+// Take "now" once so every line of one run agrees on the time (tests can fake it with SUNDOWN_NOW).
 const date = now();
 
 // "2h 05m" style durations.
+// ms is a number of milliseconds.
 function duration(ms) {
+  // Round to whole minutes and never go below 0, so a cutoff that just passed shows "0m" and not "-1m".
   const min = Math.max(0, Math.round(ms / 60000));
+  // Whole hours, and the minutes left over after removing them.
   const h = Math.floor(min / 60);
+  // With hours, show "2h 05m" (minutes padded to two digits so 5 reads as 05); under an hour, just "45m".
   return h ? `${h}h ${String(min % 60).padStart(2, "0")}m` : `${min}m`;
 }
 
 // Show a topic without printing the whole secret into logs.
+// Keep only the first 10 characters: enough to recognise the topic, not enough to guess it.
 const mask = (topic) => (topic ? `${topic.slice(0, 10)}… (set)` : "off");
 
 function status() {
+  // Ask lib.mjs whether Sundown is active right now and why (lock, quiet, dayoff, or null).
   const s = sundownState(date, cfg);
+  // Collect output lines here and print them together at the end.
   const lines = [];
+  // s.why is set only while Sundown is on. Print the reason (e.g. "it's after your 21:00 cutoff").
   if (s.why) lines.push(`☾ Sundown is ON: ${reasonText(s, cfg)}.`);
+  // Off, but a cutoff is set: say how long until the next one.
   else if (cfg.cutoff) lines.push(`☀ Sundown is off. Your cutoff is ${cfg.cutoff}, in ${duration(nextCutoffAfter(date, cfg) - date)}.`);
+  // Off and no cutoff set yet: Sundown never blocks anything, so tell the user how to set one.
   else lines.push("☀ Sundown is off. No evening cutoff yet (run /sundown:setup). /sundown:shutdown still works.");
+  // Second line always shows the main settings, with the phone topic masked.
   lines.push(`Morning: ${cfg.morning} · Days off: ${cfg.daysOff || "none"} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
+  // Print both lines at once.
   console.log(lines.join("\n"));
 }
 
 // Settings that make Sundown less strict.
+// Changing one of these while Sundown is on would let Claude end the lock early, so config() guards them.
 const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
 
 // A number, or the original text if it isn't one (so the error shows what you typed).
+// Parse a numeric setting. Number() gives NaN for text like "abc"; return that text unchanged so the validation error in setConfig can show what the user typed.
 const num = (s) => { const n = Number(s); return Number.isNaN(n) ? s : n; };
 
 function config() {
+  // No arguments: just show every setting.
   if (args.length === 0) {
+    // Print the settings as indented JSON. A missing cutoff or daysOff is shown as a readable word, and the ntfy topic is masked so it doesn't land in logs or screenshots.
     console.log(JSON.stringify({ ...cfg, cutoff: cfg.cutoff || "off", daysOff: cfg.daysOff || "none", ntfyTopic: mask(cfg.ntfyTopic) }, null, 2));
+    // Nothing more to do when only showing.
     return;
   }
+  // First argument is the setting name, second the new value (empty if the user left it out).
   const [key, raw = ""] = args;
+  // A key with no value is a mistake, not a request to clear it, so stop with a helpful message.
   if (raw === "") {
+    // Throwing lands in the catch at the bottom, which prints the message and exits 1.
     throw new Error(`Give ${key} a value. (cutoff, daysOff, ntfyTopic and wrapUpMinutes also accept "off".)`);
   }
   // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
   // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
+  // CLAUDECODE is set only in Claude's shell, so this blocks Claude, not you. Only the settings in LOOSENING are blocked, and only while Sundown is on.
   if ("CLAUDECODE" in process.env && LOOSENING.has(key) && sundownState(date, cfg).why) {
+    // Refuse with a message that tells the human what to do instead.
     throw new Error(`Sundown is on, so only you can change ${key}. Run this in your own terminal, or wait until it's off.`);
   }
   // Pointing pushes at another server would send them (maybe with your folder name) there,
   // so only you may do that, at any time of day.
+  // Same Claude-only check. This one applies at any hour, because it changes where pushes are sent.
   if ("CLAUDECODE" in process.env && key === "ntfyServer") {
+    // Refuse and point the human to their own terminal.
     throw new Error("Only you can change ntfyServer. Run this in your own terminal.");
   }
+  // By default the value is the text exactly as typed.
   let value = raw;
+  // "off" for these three settings means empty (no cutoff, no push topic, no days off).
   if (raw === "off" && (key === "cutoff" || key === "ntfyTopic" || key === "daysOff")) value = "";
+  // For daysOff, lower-case it and remove all whitespace (\s+ matches any run of spaces or tabs) so "Sat, Sun" becomes "sat,sun".
   else if (key === "daysOff") value = raw.toLowerCase().replace(/\s+/g, "");
+  // "generate" asks for a new random topic instead of a topic the user typed.
   if (key === "ntfyTopic" && raw === "generate") {
     // 96 random bits: nobody can guess it, so nobody else can read or send your pushes.
+    // 12 random bytes written as 24 hex characters, prefixed so the topic is recognisable in the ntfy app.
     value = `sundown-${crypto.randomBytes(12).toString("hex")}`;
   }
+  // These two must be numbers, so convert the text (a bad value is rejected by setConfig below).
   if (key === "minTurnSeconds" || key === "overrideMinutes") value = num(raw);
+  // "off" means 0, which turns the wrap-up note off. Anything else is parsed as a number.
   if (key === "wrapUpMinutes") value = raw === "off" ? 0 : num(raw);
+  // Validate and save. An unknown key or a bad value throws, so nothing invalid is ever written.
   setConfig(key, value); // throws a readable error on a bad key or value
+  // A push topic was just set (not turned off): show the user what to subscribe to.
   if (key === "ntfyTopic" && value) {
+    // The topic is printed in full here on purpose: the user needs it once to subscribe.
     console.log(`Phone pushes ON. In the ntfy app, subscribe to this topic (keep it private):\n${value}`);
+    // Fewer than 16 characters is easy for a stranger to guess.
     if (value.length < 16) {
+      // Warn, because anyone who guesses the topic can read or send the pushes.
       console.log("Warning: that topic is short and easy to guess, and anyone who guesses it can read your pushes. `sundown config ntfyTopic generate` makes a safe one.");
     }
+  // Every other setting (or ntfyTopic turned off): just confirm what was saved, showing an empty value as "off".
   } else {
+    // Print the confirmation.
     console.log(`${key} = ${value === "" ? "off" : value}`);
   }
 }
 
 function statusline() {
+  // Print one short line for the status bar, so every branch below ends in a single console.log.
   // Claude Code sends session JSON on stdin; we don't need it, so we don't read it.
+  // Same state check as status(), with the same meaning for s.why.
   const s = sundownState(date, cfg);
+  // Shut down by hand: say when it ends. "return console.log(...)" prints and leaves the function in one step.
   if (s.why === "lock") return console.log(`☾ Shut down · back ${dayAndTime(s.until)}`);
+  // After the cutoff: remind the user that "override:" lets a message through.
   if (s.why === "quiet") return console.log(`☾ After sundown · "override:" to send`);
+  // Day off: say when work resumes.
   if (s.why === "dayoff") return console.log(`☾ Day off · back ${dayAndTime(s.until)}`);
+  // No cutoff configured, so there is no countdown to show.
   if (!cfg.cutoff) return console.log("☀ Sundown: no cutoff set");
+  // Milliseconds until the next cutoff.
   const left = nextCutoffAfter(date, cfg) - date;
+  // Within the wrap-up window (minutes converted to ms by 60000): show the wrap-up hint. A wrapUpMinutes of 0 skips this.
   if (cfg.wrapUpMinutes && left <= cfg.wrapUpMinutes * 60000) return console.log(`◐ ${duration(left)} to sundown · time to wrap up`);
+  // Normal daytime: plain countdown to the cutoff.
   console.log(`☀ ${duration(left)} to sundown (${cfg.cutoff})`);
 }
 
 function installStatusline() {
+  // Claude Code reads its settings from CLAUDE_CONFIG_DIR if that is set, otherwise from ~/.claude.
   const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  // The settings file we edit.
   const file = path.join(base, "settings.json");
+  // The real path of this script (symlinks resolved), so the status line keeps working wherever the plugin is stored.
   const self = fs.realpathSync(fileURLToPath(import.meta.url));
+  // The status line entry to write. Claude Code re-runs the command every 60 seconds to refresh the countdown.
   const wanted = { type: "command", command: `node "${self}" statusline`, refreshInterval: 60 };
 
+  // Start from empty settings if the file doesn't exist yet.
   let settings = {};
+  // Only read the file if it exists.
   if (fs.existsSync(file)) {
+    // Parse the existing settings. If they aren't valid JSON, we must not overwrite them.
     try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch {
+      // Tell the user and stop. Exit code 1 means failure.
       console.error(`Not touching ${file}: it isn't valid JSON. Fix it first.`);
       process.exit(1);
     }
   }
+  // The status line the user already has, if any.
   const current = settings.statusLine;
   // Ours means exactly the command this script installs, wherever the plugin lives,
   // not any command that happens to contain the word "sundown".
+  // True only when the existing command ends in "/bin/sundown" statusline, with either kind of slash (the regex [\/\\] matches / or \) and a closing quote just before " statusline" at the end ($). Boolean(current) first so a missing status line is false.
   const ours = Boolean(current) && /[\/\\]bin[\/\\]sundown" statusline$/.test(String(current.command || ""));
+  // Someone else's status line is there and the user didn't pass --force: leave it alone.
   if (current && !ours && !args.includes("--force")) {
+    // Show what is there and how to replace it, then stop with failure.
     console.error(`You already have a status line:\n  ${JSON.stringify(current)}\nNot replacing it. Re-run with --force to replace it (a backup is kept).`);
     process.exit(1);
   }
   // Back up only while the status line is still yours: re-running after an update
   // must not replace your original backup with a copy that already points at Sundown.
+  // True when there is a settings file and it isn't ours yet, so a backup is worth making.
   const backedUp = fs.existsSync(file) && !ours;
+  // Copy the settings file next to itself with a .sundown-backup suffix.
   if (backedUp) fs.copyFileSync(file, `${file}.sundown-backup`);
+  // Set our status line, keeping every other setting in the file.
   settings.statusLine = wanted;
+  // Make sure the folder exists (recursive: no error if it already does).
   fs.mkdirSync(base, { recursive: true });
+  // Write the settings back, indented, with a trailing newline.
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  // Tell the user where it went, mention the backup if one was made, and remind them to re-run after an update because the path is fixed.
   console.log(`Status line installed in ${file}${backedUp ? " (your previous settings are saved as settings.json.sundown-backup)" : ""}.\nIt points at this copy of the plugin; run this again after updating Sundown.`);
 }
 
 async function testPush() {
+  // Pushes need a topic, so stop here if none is set.
   if (!cfg.ntfyTopic) {
+    // Tell the user how to set one.
     console.error("Phone pushes are off. Run: sundown config ntfyTopic generate");
+    // Exit code 1 means failure.
     process.exit(1);
   }
+  // Send a real notification and wait for the result. ok is true if the server accepted it.
   const ok = await send(cfg, { title: "Sundown", body: "Test: pushes work. Walk away, I'll call you.", tags: "crescent_moon" });
+  // Record the test in the local event log.
   logEvent("push", { event: "test", ok });
+  // Say whether it worked; on failure name the server that couldn't be reached.
   console.log(ok ? "Sent. Check your phone." : `Couldn't reach ${cfg.ntfyServer}. Check your connection.`);
+  // Exit with failure only if the push didn't go through.
   if (!ok) process.exit(1);
 }
 
 // Shutting down and waking up change what Claude is allowed to do, so only a person
 // may do it. Claude Code sets CLAUDECODE=1 in the shell it gives Claude; refuse there.
 // (The slash commands don't come through here: the prompt hook handles them.)
+// Refuse wake and shutdown when run from Claude's shell (CLAUDECODE is set there), so Claude can't switch Sundown on or off for itself.
 if ((command === "wake" || command === "shutdown") && "CLAUDECODE" in process.env) {
+  // Tell the human what to do instead, on stderr.
   console.error(`sundown: only you can ${command} Sundown. Type /sundown:${command} in Claude Code, or run this in your own terminal.`);
+  // Exit code 1 means failure.
   process.exit(1);
 }
 
+// Run the command inside try so any error below prints one clean line instead of a stack trace.
 try {
+  // Pick what to do from the first word.
+  // Pick what to do from the first word. status, config, report, statusline, install-statusline and test-push each run one function (test-push is awaited so the exit code reflects the result). Anything else, including "help", falls to the default usage text.
   switch (command) {
     case "status": status(); break;
     case "shutdown": {
+      // Switch the lock on: write the lock file, which lasts until the next work morning.
       const lock = lockOn(date, cfg);
+      // Record it in the local event log.
       logEvent("shutdown");
+      // Tell the user when it ends.
       console.log(`☾ Shut down until ${dayAndTime(new Date(lock.until))}.`);
       break;
     }
     case "wake": {
+      // Switch the lock off. First remember whether Sundown was on, so the message below is honest.
       const wasOn = Boolean(sundownState(date, cfg).why);
+      // Clear the lock and ignore quiet hours until the next cutoff; this returns that cutoff.
       const until = wake(date, cfg);
+      // Record it in the local event log.
       logEvent("wake");
+      // Different message depending on whether there was anything to switch off.
       console.log(wasOn
         ? `☀ Sundown is off until ${hhmm(until)}.`
         : `☀ Sundown wasn't on. It stays off until ${hhmm(until)} (your next cutoff).`);
@@ -183,8 +276,11 @@ try {
     }
     case "config": config(); break;
     case "report": {
+      // Print the evening report. Days come from the first argument, as a whole number. A missing or non-numeric value gives NaN, and NaN || 7 falls back to 7. Then clamp to between 1 and 90.
       const days = Math.min(90, Math.max(1, parseInt(args[0], 10) || 7));
+      // Build the report and keep only its text.
       const { text } = await buildReport({ date, cfg, days });
+      // Print it.
       console.log(text);
       break;
     }
@@ -192,11 +288,16 @@ try {
     case "install-statusline": installStatusline(); break;
     case "test-push": await testPush(); break;
     default:
+      // Anything else, including "help": show the usage line.
       console.log("Usage: sundown status | shutdown | wake | config [key value] | report [days] | test-push | statusline | install-statusline");
+      // List every valid setting name, taken from the defaults.
       console.log(`Settings: ${Object.keys(DEFAULTS).join(", ")}`);
+      // Exit with failure for an unknown command, but not for a help request. exitCode (not exit) lets pending output finish printing.
       if (!["help", "--help", "-h"].includes(command)) process.exitCode = 1; // unknown command
   }
 } catch (err) {
+  // Any error thrown above (bad value, blocked change, report failure) lands here. Show just the message on stderr.
   console.error(`sundown: ${err.message}`);
+  // Exit code 1 means failure.
   process.exit(1);
 }

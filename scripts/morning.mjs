@@ -11,53 +11,83 @@
 //
 // Fail-open: errors print nothing.
 
+// Node built-ins: fs reads TOMORROW.md, path builds its location.
 import fs from "node:fs";
 import path from "node:path";
+// Hook input, settings, time, lock helpers, state, project folder, event log, reason text and the once-only welcome note all come from lib.mjs.
 import {
   readHookInput, readConfig, now, lockState, lockOff, sundownState,
   projectDir, logEvent, reasonText, claimWelcome,
 } from "./lib.mjs";
 
+// A handoff older than this many days is considered stale and is not shown.
 const MAX_AGE_DAYS = 4;
 const MAX_CHARS = 2000; // never inject a huge file into context
 
 try {
+  // Everything runs inside try so any error reaches the catch at the bottom, which prints nothing.
   const input = await readHookInput();
+  // Claude Code sends the hook a JSON object on stdin; this reads it ({} if missing or broken).
   const date = now();
+  // "Now" is taken once for the whole run (tests can fake it with SUNDOWN_NOW).
   const cfg = readConfig();
+// Saved settings with defaults filled in.
 
+  // The shutdown lock saved earlier, or null if there is none.
   const lock = lockState(date);
+  // A lock exists but its morning has arrived (active is false): it is expired.
   if (lock && !lock.active) {
+    // Delete the lock file, so a new day starts clean.
     lockOff();
+    // Record the morning in the local event log.
     logEvent("morning");
   }
 
+  // True only the first time ever, when setup was never run. claimWelcome records that it was shown, so it appears once.
   const welcome = claimWelcome();
+  // The first-run note, shown on its own or after the reminder below.
   const nudge = "☾ Sundown is installed. Run /sundown:setup to choose your evening cutoff. Until you do, it never blocks anything.";
 
+  // Is Sundown on right now, and why (lock, quiet, or dayoff)?
   const state = sundownState(date, cfg);
+  // Sundown is on: tell the user, and don't show the handoff yet.
   if (state.why) {
+    // Reminder text with the reason and the way through.
     const msg = `☾ Sundown is on: ${reasonText(state, cfg)}. Start a message with "override:" if you really need to.`;
+    // JSON on stdout is read by Claude Code. systemMessage is shown to you. The first-run note is added only if this is the first run.
     console.log(JSON.stringify({ systemMessage: welcome ? `${msg}\n${nudge}` : msg }));
+    // Exit 0 = the hook succeeded, nothing is blocked.
     process.exit(0);
   }
+  // Not on, but first run: show just the setup note.
   if (welcome) {
+    // Same JSON form: systemMessage is shown to you.
     console.log(JSON.stringify({ systemMessage: nudge }));
+    // Exit 0 = success.
     process.exit(0);
   }
 
+  // Where the handoff note must be: TOMORROW.md in the project root (projectDir comes from the hook input).
   const file = path.join(projectDir(input), "TOMORROW.md");
+  // Information about the file; stays undefined if it can't be read.
   let stat;
   // lstat, not stat: a TOMORROW.md that is a symlink could point at any file (a key, a
   // password list) and we would paste it into your session. Plain files only.
+  // If the file doesn't exist or can't be read, there is nothing to greet you with, so exit 0 quietly.
   try { stat = fs.lstatSync(file); } catch { process.exit(0); }
+  // Ignore anything that isn't a plain file (a folder, a symlink).
   if (!stat.isFile() || stat.isSymbolicLink()) process.exit(0);
+  // Skip a stale handoff. date - mtime is milliseconds; 86400000 is the number of milliseconds in a day.
   if (date - stat.mtime > MAX_AGE_DAYS * 86400000) process.exit(0);
 
+  // Read the note and trim whitespace.
   let text = fs.readFileSync(file, "utf8").trim();
+  // Record in the local event log that a handoff was shown.
   logEvent("handoff");
+  // Cut very long notes at MAX_CHARS and add an ellipsis, so the file can't flood Claude's context.
   if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS) + "\n…";
 
+  // Greeting as JSON for Claude Code. systemMessage is shown to you; additionalContext is given to Claude. The note is labelled as notes, not instructions, so text inside it can't tell Claude what to do.
   console.log(JSON.stringify({
     systemMessage: `☀ Good morning. Last time you stopped here:\n${text}`,
     hookSpecificOutput: {
@@ -69,7 +99,10 @@ try {
         "\nIf they ask where to start, begin with the 'First step tomorrow' line.",
     },
   }));
+  // Exit 0 = success.
   process.exit(0);
 } catch {
+  // Fail open: on any error print nothing and exit 0, so a bug here can't get in the way of starting a session.
+  // Exit 0 = success.
   process.exit(0);
 }
