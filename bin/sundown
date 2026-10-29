@@ -6,12 +6,13 @@
 // it yourself from a terminal with:  node /path/to/sundown/bin/sundown <command>
 //
 //   sundown status                  is Sundown on? time until your cutoff, settings
-//   sundown shutdown                switch the lock on until your morning time
-//   sundown wake                    switch it off until your next cutoff
+//   sundown shutdown                switch the lock on until your morning time  (you only, not Claude)
+//   sundown wake                    switch it off until your next cutoff        (you only, not Claude)
 //   sundown config                  show settings
 //   sundown config <key> <value>    change one (cutoff 21:00 · cutoff off · morning 08:00 ·
 //                                   ntfyTopic generate · ntfyTopic off · pushDetail folder ·
-//                                   minTurnSeconds 60 · overrideMinutes 20)
+//                                   minTurnSeconds 60 · overrideMinutes 20 ·
+//                                   daysOff sat,sun · daysOff off · wrapUpMinutes 30)
 //   sundown report [days]           the evening report (default 7 days, max 90)
 //   sundown test-push               send a test notification to your phone
 //   sundown statusline              one line for Claude Code's status bar
@@ -26,7 +27,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
-  nextCutoffAfter, DEFAULTS,
+  nextCutoffAfter, reasonText, dayAndTime, DEFAULTS,
 } from "../scripts/lib.mjs";
 import { buildReport } from "../scripts/report.mjs";
 import { send } from "../scripts/push.mjs";
@@ -48,11 +49,10 @@ const mask = (topic) => (topic ? `${topic.slice(0, 10)}… (set)` : "off");
 function status() {
   const s = sundownState(date, cfg);
   const lines = [];
-  if (s.why === "lock") lines.push(`☾ Sundown is ON: you shut down for today. Back at ${hhmm(s.until)}.`);
-  else if (s.why === "quiet") lines.push(`☾ Sundown is ON: it's after your ${cfg.cutoff} cutoff. Back at ${hhmm(s.until)}.`);
+  if (s.why) lines.push(`☾ Sundown is ON: ${reasonText(s, cfg)}.`);
   else if (cfg.cutoff) lines.push(`☀ Sundown is off. Your cutoff is ${cfg.cutoff}, in ${duration(nextCutoffAfter(date, cfg) - date)}.`);
   else lines.push("☀ Sundown is off. No evening cutoff yet (run /sundown:setup). /sundown:shutdown still works.");
-  lines.push(`Morning: ${cfg.morning} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
+  lines.push(`Morning: ${cfg.morning} · Days off: ${cfg.daysOff || "none"} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
   console.log(lines.join("\n"));
 }
 
@@ -63,12 +63,14 @@ function config() {
   }
   const [key, raw = ""] = args;
   let value = raw;
-  if (raw === "off" && (key === "cutoff" || key === "ntfyTopic")) value = "";
+  if (raw === "off" && (key === "cutoff" || key === "ntfyTopic" || key === "daysOff")) value = "";
+  else if (key === "daysOff") value = raw.toLowerCase().replace(/\s+/g, "");
   if (key === "ntfyTopic" && raw === "generate") {
     // 96 random bits: nobody can guess it, so nobody else can read or send your pushes.
     value = `sundown-${crypto.randomBytes(12).toString("hex")}`;
   }
   if (key === "minTurnSeconds" || key === "overrideMinutes") value = Number(raw);
+  if (key === "wrapUpMinutes") value = raw === "off" ? 0 : Number(raw);
   setConfig(key, value); // throws a readable error on a bad key or value
   if (key === "ntfyTopic" && value) {
     console.log(`Phone pushes ON. In the ntfy app, subscribe to this topic (keep it private):\n${value}`);
@@ -82,6 +84,7 @@ function statusline() {
   const s = sundownState(date, cfg);
   if (s.why === "lock") return console.log(`☾ Shut down · back ${hhmm(s.until)}`);
   if (s.why === "quiet") return console.log(`☾ After sundown · "override:" to send`);
+  if (s.why === "dayoff") return console.log(`☾ Day off · back ${dayAndTime(s.until)}`);
   if (!cfg.cutoff) return console.log("☀ Sundown: no cutoff set");
   const left = nextCutoffAfter(date, cfg) - date;
   if (left <= 30 * 60000) return console.log(`◐ ${duration(left)} to sundown · time to wrap up`);
@@ -106,7 +109,10 @@ function installStatusline() {
     console.error(`You already have a status line:\n  ${JSON.stringify(current)}\nNot replacing it. Re-run with --force to replace it (a backup is kept).`);
     process.exit(1);
   }
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.sundown-backup`);
+  // Back up only while the status line is still yours: re-running after an update
+  // must not replace your original backup with a copy that already points at Sundown.
+  const ours = current && String(current.command || "").includes("sundown");
+  if (fs.existsSync(file) && !ours) fs.copyFileSync(file, `${file}.sundown-backup`);
   settings.statusLine = wanted;
   fs.mkdirSync(base, { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
@@ -122,6 +128,14 @@ async function testPush() {
   logEvent("push", { event: "test", ok });
   console.log(ok ? "Sent. Check your phone." : `Couldn't reach ${cfg.ntfyServer}. Check your connection.`);
   if (!ok) process.exit(1);
+}
+
+// Shutting down and waking up change what Claude is allowed to do, so only a person
+// may do it. Claude Code sets CLAUDECODE=1 in the shell it gives Claude; refuse there.
+// (The slash commands don't come through here: the prompt hook handles them.)
+if ((command === "wake" || command === "shutdown") && process.env.CLAUDECODE) {
+  console.error(`sundown: only you can ${command} Sundown. Type /sundown:${command} in Claude Code, or run this in your own terminal.`);
+  process.exit(1);
 }
 
 try {

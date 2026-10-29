@@ -9,7 +9,7 @@ allowed-tools: Bash(sundown *)
 !`sundown report 7`
 
 Summarise this for the user in at most four short lines:
-- how many evenings they kept working and their latest finish,
+- how many evenings they kept working and their typical finish, compared with the period before when the report shows it,
 - one pattern you can actually see in the table (for example, which day ran latest), only if there is one,
 - how many messages Sundown held back and how many they overrode.
 

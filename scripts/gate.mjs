@@ -8,7 +8,9 @@
 //      They are handled HERE, not by Claude, on purpose: this hook only runs for
 //      messages a person typed, so Claude can never shut itself down or wake itself up.
 //   3. Lets every other /sundown:... command through (status, report, setup), even at night.
-//   4. While Sundown is active (lock on, or after your cutoff):
+//   4. Shortly before your cutoff (wrapUpMinutes, once a day): one gentle note so you
+//      can land the current task instead of hitting the wall mid-way.
+//   5. While Sundown is active (lock on, after your cutoff, or on a day off):
 //        - a message starting with "override:" goes through, gets a short pass
 //          (overrideMinutes) and is counted in your report;
 //        - while that pass lasts, the same session's messages go through too;
@@ -26,7 +28,10 @@ import path from "node:path";
 import {
   readHookInput, readConfig, now, sundownState, recordTurnStart,
   grantPass, hasPass, logEvent, hhmm, lockOn, wake, projectDir,
+  reasonText, minutesToCutoff, claimWrapUp,
 } from "./lib.mjs";
+
+const REASON_NAME = { lock: "after the user's shutdown", quiet: "after the user's evening cutoff", dayoff: "the user's day off" };
 
 try {
   const input = await readHookInput();
@@ -55,7 +60,25 @@ try {
   // 3. Other Sundown commands always work, so you can check status or run setup at night.
   if (/^\/sundown:/i.test(prompt)) process.exit(0);
 
-  // 4. The gate itself.
+  // 4. The wrap-up note. "systemMessage" is shown to you; "additionalContext" tells
+  //    Claude, so it can suggest a clean stopping point rather than start something big.
+  const left = minutesToCutoff(date, cfg);
+  if (left !== null && left <= cfg.wrapUpMinutes && claimWrapUp(date, cfg)) {
+    logEvent("wrapup");
+    console.log(JSON.stringify({
+      systemMessage: `◐ Sundown: ${left} min to your ${cfg.cutoff} cutoff. A good moment to land this task; /sundown:shutdown saves tomorrow's first step.`,
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext:
+          `Sundown: the user's evening cutoff (${cfg.cutoff}) is in ${left} minutes. ` +
+          "Do what they asked, but prefer a clean stopping point over starting anything large, " +
+          "and don't suggest follow-up work for tonight.",
+      },
+    }));
+    process.exit(0);
+  }
+
+  // 5. The gate itself.
   const state = sundownState(date, cfg);
   if (!state.why) process.exit(0);
 
@@ -67,16 +90,14 @@ try {
     grantPass(input.session_id, date, cfg.overrideMinutes);
     logEvent("override", { reason: state.why });
     console.log(
-      `Sundown: it's after the user's ${state.why === "lock" ? "shutdown" : "evening cutoff"} and they chose to override it ` +
+      `Sundown: it's ${REASON_NAME[state.why]} and they chose to override it ` +
       `for this request (about ${cfg.overrideMinutes} minutes). Do only what this message asks, keep it short, and don't suggest follow-up work.`,
     );
     process.exit(0);
   }
 
   logEvent("blocked", { reason: state.why });
-  const why = state.why === "lock"
-    ? `you shut down for today (until ${hhmm(state.until)})`
-    : `it's after your ${cfg.cutoff} cutoff (until ${hhmm(state.until)})`;
+  const why = reasonText(state, cfg);
   // Only point at TOMORROW.md if this project actually has one.
   const hasHandoff = fs.existsSync(path.join(projectDir(input), "TOMORROW.md"));
   process.stderr.write(

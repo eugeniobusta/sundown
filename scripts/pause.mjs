@@ -8,7 +8,8 @@
 //   1. A session with an override pass works normally.
 //   2. Read-only tools (Read, Glob, Grep, LS) are allowed, so Claude can look at
 //      what it was doing and write an accurate handoff.
-//   3. Writing or editing TOMORROW.md is allowed: that's the handoff.
+//   3. Writing or editing THIS project's TOMORROW.md is allowed: that's the handoff.
+//      (Only the one in the project root, not any file that happens to share the name.)
 //   4. Once TOMORROW.md has been written since the lock was set, the next tool
 //      call stops the agent completely ({"continue": false}).
 //   5. Anything else is denied, with a reason that tells Claude exactly what to do.
@@ -25,6 +26,13 @@ import {
 // accurate handoff.
 const READ_ONLY = new Set(["Read", "Glob", "Grep", "LS"]);
 
+// Same file? Compares folders with symlinks resolved (/tmp vs /private/tmp on macOS).
+function samePath(a, b) {
+  if (path.basename(a) !== path.basename(b)) return false;
+  if (path.dirname(a) === path.dirname(b)) return true;
+  try { return fs.realpathSync(path.dirname(a)) === fs.realpathSync(path.dirname(b)); } catch { return false; }
+}
+
 try {
   const input = await readHookInput();
   const date = now();
@@ -37,12 +45,16 @@ try {
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
   if (READ_ONLY.has(tool)) process.exit(0);
 
-  const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
-  if ((tool === "Write" || tool === "Edit") && path.basename(filePath) === "TOMORROW.md") process.exit(0);
-
   const handoff = path.join(projectDir(input), "TOMORROW.md");
+  const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
+  if ((tool === "Write" || tool === "Edit") && filePath && samePath(path.resolve(projectDir(input), filePath), handoff)) {
+    process.exit(0);
+  }
   let handoffWritten = false;
-  try { handoffWritten = fs.statSync(handoff).mtime >= lock.setAt; } catch { /* no handoff yet */ }
+  try {
+    const written = fs.statSync(handoff).mtime;
+    handoffWritten = written >= lock.setAt || written >= lock.setAtReal;
+  } catch { /* no handoff yet */ }
 
   if (handoffWritten) {
     logEvent("paused", { tool });

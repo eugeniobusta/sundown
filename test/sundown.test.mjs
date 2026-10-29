@@ -188,7 +188,7 @@ test("morning: shows a fresh TOMORROW.md to you and to Claude, and clears an exp
   fs.utimesSync(handoff, t, t);
 
   const night = JSON.parse(hook(w, "morning.mjs", {}, "2026-10-29T23:00:00").out);
-  assert.match(night.systemMessage, /on until 08:00/);
+  assert.match(night.systemMessage, /shut down for today \(until 08:00\)/);
 
   const r = JSON.parse(hook(w, "morning.mjs", {}, "2026-10-30T09:00:00").out);
   assert.match(r.systemMessage, /Good morning/);
@@ -326,4 +326,128 @@ test("gate: an override pass covers that session's next messages, and shutdown c
   hook(w, "gate.mjs", { prompt: "override: one more" }, "2026-10-29T22:40:00");
   hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T22:41:00");
   assert.equal(hook(w, "gate.mjs", { prompt: "still there?" }, "2026-10-29T22:42:00").code, 2);
+});
+
+// ---------------------------------------------------------------------------
+// Days off, the wrap-up note, first run, and the fixes from review
+// ---------------------------------------------------------------------------
+
+test("days off: quiet all day, Friday evening runs to Monday morning, and morning on a day off stays quiet", async () => {
+  const { sundownState, isDayOff } = await import(script("lib.mjs"));
+  const cfg = { cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" };
+  // 2026-10-31 is a Saturday.
+  assert.equal(isDayOff(new Date("2026-10-31T14:00:00"), cfg), true);
+  assert.equal(isDayOff(new Date("2026-10-31T02:00:00"), cfg), false); // still Friday night
+  assert.equal(isDayOff(new Date("2026-11-02T07:00:00"), cfg), true);  // still Sunday night
+  assert.equal(isDayOff(new Date("2026-11-02T09:00:00"), cfg), false);
+  const fri = sundownState(new Date("2026-10-30T22:00:00"), cfg);
+  assert.equal(fri.why, "quiet");
+  assert.equal(fri.until.getDay(), 1); // Monday
+  assert.equal(sundownState(new Date("2026-10-31T14:00:00"), cfg).why, "dayoff");
+});
+
+test("days off: the gate holds prompts back on a day off and says so", () => {
+  const w = world({ cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" });
+  const r = hook(w, "gate.mjs", { prompt: "quick thing" }, "2026-10-31T14:00:00");
+  assert.equal(r.code, 2);
+  assert.match(r.err, /day off \(until Mon 08:00\)/);
+  assert.equal(hook(w, "gate.mjs", { prompt: "quick thing" }, "2026-10-30T14:00:00").code, 0); // Friday
+});
+
+test("cli: daysOff accepts day names and rejects nonsense", () => {
+  const w = world();
+  assert.equal(cli(w, ["config", "daysOff", "Sat, Sun"]).code, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).daysOff, "sat,sun");
+  assert.equal(cli(w, ["config", "daysOff", "funday"]).code, 1);
+  assert.equal(cli(w, ["config", "daysOff", "sat,sat"]).code, 1);
+  assert.equal(cli(w, ["config", "daysOff", "mon,tue,wed,thu,fri,sat,sun"]).code, 1); // keep one working day
+  assert.equal(cli(w, ["config", "daysOff", "off"]).code, 0);
+});
+
+test("wrap-up: one note shortly before the cutoff, once a day, to you and to Claude", () => {
+  const w = world();
+  assert.equal(hook(w, "gate.mjs", { prompt: "a" }, "2026-10-29T20:00:00").out, ""); // 60 min left: nothing
+  const first = hook(w, "gate.mjs", { prompt: "b" }, "2026-10-29T20:40:00");
+  assert.equal(first.code, 0);
+  const note = JSON.parse(first.out);
+  assert.match(note.systemMessage, /20 min to your 21:00 cutoff/);
+  assert.match(note.hookSpecificOutput.additionalContext, /clean stopping point/);
+  assert.equal(hook(w, "gate.mjs", { prompt: "c" }, "2026-10-29T20:50:00").out, ""); // already shown today
+  assert.notEqual(hook(w, "gate.mjs", { prompt: "d" }, "2026-10-30T20:45:00").out, ""); // next day: again
+
+  const off = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 0 });
+  assert.equal(hook(off, "gate.mjs", { prompt: "b" }, "2026-10-29T20:40:00").out, "");
+});
+
+test("morning: points a brand-new install at /sundown:setup, once", () => {
+  const state = tmp("sd-state-");
+  const w = { state, project: tmp("sd-proj-"), claude: tmp("sd-claude-") };
+  const first = hook(w, "morning.mjs", {}, "2026-10-29T10:00:00");
+  assert.match(JSON.parse(first.out).systemMessage, /\/sundown:setup/);
+  assert.equal(hook(w, "morning.mjs", {}, "2026-10-29T11:00:00").out, "");
+});
+
+test("pause: during shutdown only this project's TOMORROW.md counts as the handoff", () => {
+  const w = world();
+  hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  const elsewhere = path.join(tmp("sd-elsewhere-"), "TOMORROW.md");
+  const r = hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: elsewhere } }, "2026-10-29T18:01:00");
+  assert.equal(JSON.parse(r.out).hookSpecificOutput.permissionDecision, "deny");
+  const rel = hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: "TOMORROW.md" } }, "2026-10-29T18:01:00");
+  assert.equal(rel.out, "");
+});
+
+test("cli: Claude can't wake or shut down Sundown from its shell; you can", () => {
+  const w = world();
+  const run = (args, extra) => spawnSync("node", [BIN, ...args], {
+    env: { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: "2026-10-29T22:00:00", CLAUDE_CONFIG_DIR: w.claude, ...extra },
+    encoding: "utf8",
+  });
+  const claude = run(["wake"], { CLAUDECODE: "1" });
+  assert.equal(claude.status, 1);
+  assert.match(claude.stderr, /only you can wake/);
+  assert.ok(!fs.existsSync(path.join(w.state, "awake")));
+  const env = { ...process.env };
+  delete env.CLAUDECODE;
+  const you = spawnSync("node", [BIN, "wake"], {
+    env: { ...env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: "2026-10-29T22:00:00", CLAUDE_CONFIG_DIR: w.claude },
+    encoding: "utf8",
+  });
+  assert.equal(you.status, 0, you.stderr);
+  assert.ok(fs.existsSync(path.join(w.state, "awake")));
+});
+
+test("cli: re-running install-statusline keeps the backup of your original settings", () => {
+  const w = world();
+  const settings = path.join(w.claude, "settings.json");
+  fs.writeFileSync(settings, JSON.stringify({ statusLine: { type: "command", command: "my-own-line" } }));
+  assert.equal(cli(w, ["install-statusline", "--force"]).code, 0);
+  assert.equal(cli(w, ["install-statusline"]).code, 0); // e.g. after updating Sundown
+  assert.match(fs.readFileSync(`${settings}.sundown-backup`, "utf8"), /my-own-line/);
+});
+
+test("report: a cutoff after midnight counts only those hours as evening", async () => {
+  const { isEvening } = await import(script("report.mjs"));
+  const cfg = { cutoff: "01:00", morning: "08:00" };
+  assert.equal(isEvening(new Date("2026-10-29T15:00:00"), cfg), false);
+  assert.equal(isEvening(new Date("2026-10-29T23:00:00"), cfg), false);
+  assert.equal(isEvening(new Date("2026-10-30T02:00:00"), cfg), true);
+});
+
+test("report: compares with the week before and counts mornings that started from a handoff", () => {
+  const w = world();
+  const proj = path.join(w.claude, "projects", "-Users-me-app");
+  fs.mkdirSync(proj, { recursive: true });
+  const line = (uuid, iso) => JSON.stringify({ type: "user", uuid, timestamp: new Date(iso).toISOString(), message: { content: "x" } }) + "\n";
+  fs.writeFileSync(path.join(proj, "s.jsonl"),
+    // The week before: two late evenings.
+    line("a", "2026-10-20T23:00:00") + line("b", "2026-10-21T23:30:00") +
+    // This week: one day, finished at 18:00.
+    line("c", "2026-10-28T18:00:00"));
+  fs.writeFileSync(path.join(w.state, "events.log"), JSON.stringify({ t: new Date("2026-10-28T09:00:00").toISOString(), type: "handoff" }) + "\n");
+  const r = cli(w, ["report", "7"], "2026-10-29T15:00:00");
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /Evenings you kept working: 0 of 7 \(the 7 days before: 2 of 7\)/);
+  assert.match(r.out, /Typical finish: 18:00 \(before: 23:15\)/);
+  assert.match(r.out, /Mornings that started from TOMORROW\.md: 1/);
 });

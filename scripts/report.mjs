@@ -4,7 +4,11 @@
 //   1. Claude Code's own session logs (~/.claude/projects/*/*.jsonl).
 //      We read ONLY the timestamp of each message YOU typed. The text of your
 //      prompts, Claude's answers and your code are never read into the report.
-//   2. Sundown's events.log (blocks, overrides, shutdowns, pushes).
+//   2. Sundown's events.log (blocks, overrides, shutdowns, pushes, mornings that
+//      started from a TOMORROW.md handoff).
+//
+// Each number is compared with the period before it ("4 of 7, was 1 of 7"), so you
+// can see whether the evenings are actually coming back.
 //
 // A late-night message belongs to the day it continues: 01:10 on Friday counts as
 // part of Thursday evening (anything before your morning time).
@@ -17,26 +21,24 @@ import path from "node:path";
 import readline from "node:readline";
 import {
   claudeProjectsDir, readEvents, toMinutes, minuteOfDay, stateDir, hhmm,
+  workdayKey, isQuiet, isDayOff,
 } from "./lib.mjs";
 
 // Used for the "evening" column when you haven't chosen a cutoff yet.
 export const DEFAULT_EVENING = "19:30";
 
-const pad = (n) => String(n).padStart(2, "0");
 const DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // The calendar day a moment belongs to, as "YYYY-MM-DD" (before morning = yesterday).
 export function workday(date, cfg) {
-  const d = new Date(date);
-  if (minuteOfDay(d) < toMinutes(cfg.morning)) d.setDate(d.getDate() - 1);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return workdayKey(date, cfg);
 }
 
-// Is this moment in the evening (from the cutoff until the morning)?
+// Is this moment in the evening (from the cutoff until the morning)? Same rule as the
+// gate, including a cutoff after midnight (01:00 -> 08:00).
 export function isEvening(date, cfg) {
-  const m = minuteOfDay(date);
-  return m >= toMinutes(cfg.cutoff || DEFAULT_EVENING) || m < toMinutes(cfg.morning);
+  return isQuiet(date, { ...cfg, cutoff: cfg.cutoff || DEFAULT_EVENING });
 }
 
 // Minutes since the start of the workday, so 01:10 sorts AFTER 23:50.
@@ -102,7 +104,11 @@ export function summarise({ prompts, events, date, cfg, days }) {
     d.setDate(d.getDate() - i);
     d.setHours(12, 0, 0, 0);
     const key = workday(d, cfg);
-    const row = { key, label: `${DAY[d.getDay()]} ${d.getDate()} ${MONTH[d.getMonth()]}`, prompts: 0, evening: 0, last: null, blocked: 0, overrides: 0 };
+    const row = {
+      key, label: `${DAY[d.getDay()]} ${d.getDate()} ${MONTH[d.getMonth()]}`,
+      prompts: 0, evening: 0, last: null, blocked: 0, overrides: 0,
+      dayOff: isDayOff(d, cfg), handoff: false,
+    };
     rows.push(row);
     index.set(key, row);
   }
@@ -121,6 +127,7 @@ export function summarise({ prompts, events, date, cfg, days }) {
     if (!row) continue;
     if (e.type === "blocked") row.blocked++;
     if (e.type === "override") row.overrides++;
+    if (e.type === "handoff") row.handoff = true;
   }
 
   const active = rows.filter((r) => r.prompts > 0);
@@ -129,6 +136,16 @@ export function summarise({ prompts, events, date, cfg, days }) {
   let latest = null;
   for (const r of rows) if (r.last && (!latest || lateness(r.last, cfg) > lateness(latest.last, cfg))) latest = r;
 
+  // Typical finish: the average time of each active day's last prompt, counted from the
+  // morning so 23:00 and 01:00 average to midnight, not to noon.
+  let typicalFinish = null;
+  if (active.length) {
+    const avg = Math.round(active.reduce((sum, r) => sum + lateness(r.last, cfg), 0) / active.length);
+    const m = (avg + toMinutes(cfg.morning)) % 1440;
+    typicalFinish = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  }
+  const daysOff = rows.filter((r) => r.dayOff);
+
   return {
     days, evening, rows,
     activeDays: active.length,
@@ -136,6 +153,10 @@ export function summarise({ prompts, events, date, cfg, days }) {
     totalPrompts, totalEvening,
     eveningShare: totalPrompts ? Math.round((totalEvening / totalPrompts) * 100) : 0,
     latest: latest ? { time: hhmm(latest.last), label: latest.label } : null,
+    typicalFinish,
+    handoffMornings: rows.filter((r) => r.handoff).length,
+    daysOff: daysOff.length,
+    daysOffWorked: daysOff.filter((r) => r.prompts > 0).length,
     blocked: rows.reduce((s, r) => s + r.blocked, 0),
     overrides: rows.reduce((s, r) => s + r.overrides, 0),
   };
@@ -152,9 +173,13 @@ export function renderText(s, htmlPath) {
     );
   }
   out.push("");
-  out.push(`Evenings you kept working: ${s.eveningsWorked} of ${s.days}`);
+  const p = s.previous && s.previous.totalPrompts ? s.previous : null;
+  out.push(`Evenings you kept working: ${s.eveningsWorked} of ${s.days}${p ? ` (the ${s.days} days before: ${p.eveningsWorked} of ${s.days})` : ""}`);
   out.push(`Prompts in the evening: ${s.totalEvening} of ${s.totalPrompts} (${s.eveningShare}%)`);
+  if (s.typicalFinish) out.push(`Typical finish: ${s.typicalFinish}${p && p.typicalFinish ? ` (before: ${p.typicalFinish})` : ""}`);
   if (s.latest) out.push(`Latest finish: ${s.latest.time} (${s.latest.label})`);
+  if (s.daysOff) out.push(`Days off you kept off: ${s.daysOff - s.daysOffWorked} of ${s.daysOff}`);
+  if (s.handoffMornings) out.push(`Mornings that started from TOMORROW.md: ${s.handoffMornings}`);
   out.push(`Sundown held back ${s.blocked} message(s); you overrode it ${s.overrides} time(s).`);
   if (htmlPath) out.push(`Full report: ${htmlPath}`);
   return out.join("\n");
@@ -190,10 +215,12 @@ h1{font-size:28px;margin:0 0 4px}p{color:var(--muted);margin:0 0 24px}
 <h1>Where did my evenings go?</h1>
 <p>Last ${s.days} days · evening starts at ${esc(s.evening)} · built locally from Claude Code's session timestamps (no prompt text)</p>
 <div class="stats">
-<div class="stat"><b>${s.eveningsWorked} / ${s.days}</b>evenings you kept working</div>
+<div class="stat"><b>${s.days - s.eveningsWorked} / ${s.days}</b>evenings off${s.previous && s.previous.totalPrompts ? ` (before: ${s.days - s.previous.eveningsWorked})` : ""}</div>
+<div class="stat"><b>${s.typicalFinish ? esc(s.typicalFinish) : "-"}</b>typical finish${s.previous && s.previous.typicalFinish ? ` (before: ${esc(s.previous.typicalFinish)})` : ""}</div>
 <div class="stat"><b>${s.eveningShare}%</b>of prompts in the evening</div>
 <div class="stat"><b>${s.latest ? esc(s.latest.time) : "-"}</b>latest finish${s.latest ? ` (${esc(s.latest.label)})` : ""}</div>
 <div class="stat"><b>${s.blocked}</b>messages Sundown held back</div>
+<div class="stat"><b>${s.handoffMornings}</b>mornings started from TOMORROW.md</div>
 </div>
 ${bars}
 </main></body></html>`;
@@ -201,10 +228,16 @@ ${bars}
 
 // Build everything and write the HTML file. Returns { summary, text, htmlPath }.
 export async function buildReport({ date, cfg, days = 7 }) {
+  // Read twice the period, so this week can be compared with the week before.
   const since = new Date(date);
-  since.setDate(since.getDate() - days - 1); // one extra day so the first evening is complete
+  since.setDate(since.getDate() - 2 * days - 1); // one extra day so the first evening is complete
   const prompts = await collectPrompts(since);
-  const summary = summarise({ prompts, events: readEvents(), date, cfg, days });
+  const events = readEvents();
+  const summary = summarise({ prompts, events, date, cfg, days });
+  const before = new Date(date);
+  before.setDate(before.getDate() - days);
+  const prev = summarise({ prompts, events, date: before, cfg, days });
+  summary.previous = { eveningsWorked: prev.eveningsWorked, typicalFinish: prev.typicalFinish, totalPrompts: prev.totalPrompts };
   const htmlPath = path.join(stateDir(), "report.html");
   fs.writeFileSync(htmlPath, renderHtml(summary), { mode: 0o600 });
   return { summary, text: renderText(summary, htmlPath), htmlPath };
