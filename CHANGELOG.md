@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+- **Dreaming at shutdown.** `/sundown:shutdown` now also writes `DREAM.md`: Claude reads its memory of the project (and `CLAUDE.md`) and proposes a tidy-up (**Merge** duplicates, **Update** stale or contradicted notes, **New** lessons from the session). It is modelled on Anthropic's *dreaming* for Claude Managed Agents (May 2026, research preview): a separate pass, the original never touched, you review and decide. Anthropic's version is an API for cloud memory stores that Claude Code can't use, so this is a local equivalent, not a call to it.
+- **Nothing is applied automatically.** During shutdown the pause hook allows writes to `DREAM.md` and `TOMORROW.md` only, so the dream can't edit memory. The morning greeting points at `DREAM.md` without pasting it. `/sundown:dream` shows a summary, `/sundown:dream apply` makes the changes (then deletes the file), `/sundown:dream discard` deletes it.
+- **Two settings.** `dream` (`on` by default, `off` to skip it) and `dreamInstructions` (one line, up to 1000 characters, steers the dream, like Anthropic's `instructions`; `off` clears it). `sundown status` shows whether the dream is on. `/sundown:setup` explains it and offers both.
+- **`sundown dream clear`** deletes a plain `DREAM.md` in the current folder.
+- A `dream` entry in the event log when a waiting dream is shown in the morning (no content).
+
+### Changed
+- The shutdown skill now has a dream step before the handoff. The handoff still comes last, because writing it ends the session. If the dream is skipped, nothing else changes: the handoff still stops the agent.
+- Behaviour change for existing installs: the dream is **on** by default, so the next `/sundown:shutdown` will write `DREAM.md`. Run `sundown config dream off` to keep the old behaviour. Consider adding `DREAM.md` to `.gitignore`.
+
+### Tests
+- 73 tests (was 65).
+
 ## 1.1.6
 
 ### Changed

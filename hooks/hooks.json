@@ -1,5 +1,5 @@
 {
-  "description": "Sundown: block new prompts after your cutoff, pause running agents after /sundown:shutdown, greet you with TOMORROW.md in the morning, and (if you opt in) push to your phone when Claude needs you or finishes.",
+  "description": "Sundown: block new prompts after your cutoff, pause running agents after /sundown:shutdown (letting them write only TOMORROW.md and the dream, DREAM.md), greet you with TOMORROW.md and any waiting dream in the morning, and (if you opt in) push to your phone when Claude needs you or finishes.",
   "hooks": {
     "UserPromptSubmit": [
       {

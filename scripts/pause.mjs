@@ -11,7 +11,11 @@
 //      Claude Code versions search files through Bash. Claude needs to look at what it
 //      was doing to write an accurate handoff.
 //   3. Writing or editing THIS project's TOMORROW.md is allowed: that's the handoff.
-//      (Only the one in the project root, not any file that happens to share the name.)
+//      So is DREAM.md in the same folder, while the "dream" setting is on: that's the
+//      dream, a proposal to tidy Claude's memory. It is written BEFORE the handoff,
+//      because the handoff ends the session. Nothing else can be written, so the
+//      dream can only propose changes to memory, never make them.
+//      (Only the ones in the project root, not any file that happens to share the name.)
 //   4. Once TOMORROW.md has been written since the lock was set, the next tool
 //      call stops the agent completely ({"continue": false}).
 //   5. Anything else is denied, with a reason that tells Claude exactly what to do.
@@ -23,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 // Hook input, time, lock and pass state, the project folder, the event log, the time formatter and the read-only shell check all come from lib.mjs, shared with the other hooks.
 import {
-  readHookInput, now, lockState, hasPass, projectDir, logEvent, dayAndTime, isReadOnlyBash,
+  readHookInput, readConfig, now, lockState, hasPass, projectDir, logEvent, dayAndTime, isReadOnlyBash, DREAM_FILE,
 } from "./lib.mjs";
 
 // Tools that only look at files. Allowed during the lock so Claude can write an
@@ -31,8 +35,8 @@ import {
 // A set gives a fast yes/no check on the tool name.
 const READ_ONLY = new Set(["Read", "Glob", "Grep", "LS"]);
 
-// Tools that may write the handoff.
-// The three tools that write files; only allowed on TOMORROW.md (checked below).
+// Tools that may write the handoff (and the dream).
+// The three tools that write files; only allowed on TOMORROW.md and, when dreaming is on, DREAM.md (checked below).
 const HANDOFF_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
 
 // Same file? Compares folders with symlinks resolved (/tmp vs /private/tmp on macOS).
@@ -69,15 +73,20 @@ try {
   const handoff = path.join(projectDir(input), "TOMORROW.md");
   // The file the tool wants to touch, or "" if there isn't one.
   const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
-  // A TOMORROW.md that is itself a symlink could point anywhere: don't write through it.
-  // Assume the handoff is a normal file until the check below shows otherwise.
-  let handoffIsLink = false;
-  // lstat looks at the file itself without following a symlink. If the file doesn't exist it throws and the answer stays false.
-  try { handoffIsLink = fs.lstatSync(handoff).isSymbolicLink(); } catch { /* no file yet */ }
-  // Allow only if: the tool is a writing tool, the handoff isn't a symlink, a path was given, and that path (resolved against the project folder, so relative paths work) is the handoff file.
-  if (HANDOFF_TOOLS.has(tool) && !handoffIsLink && filePath && samePath(path.resolve(projectDir(input), filePath), handoff)) {
-    // Exit 0 = allow: this is Claude writing the handoff.
-    process.exit(0);
+  // A TOMORROW.md or DREAM.md that is itself a symlink could point anywhere: don't write through it.
+  // True when the file at `file` is a symlink. lstat looks at the file itself without following it; a missing file throws, which means "not a link".
+  const isLink = (file) => { try { return fs.lstatSync(file).isSymbolicLink(); } catch { return false; } };
+  // The file this tool wants to write, resolved against the project folder so relative paths work.
+  const target = filePath ? path.resolve(projectDir(input), filePath) : "";
+  // Allow only if: the tool is a writing tool, a path was given, and that path is the handoff or (dreaming on) the dream, neither being a symlink.
+  if (HANDOFF_TOOLS.has(tool) && target) {
+    // The dream file lives next to the handoff, and is only writable while the setting is on.
+    const dream = path.join(projectDir(input), DREAM_FILE);
+    if ((samePath(target, handoff) && !isLink(handoff)) ||
+        (readConfig().dream === "on" && samePath(target, dream) && !isLink(dream))) {
+      // Exit 0 = allow: this is Claude writing the handoff or the dream.
+      process.exit(0);
+    }
   }
   // Has the handoff already been written since the lock was set? Assume no until the file's time proves it.
   let handoffWritten = false;
@@ -126,7 +135,10 @@ try {
         `The user has shut down for the day (Sundown, until ${dayAndTime(lock.until)}). Don't continue the task. ` +
         "Write a short handoff to TOMORROW.md in the project root with exactly three lines: " +
         "\"Stopped at: …\", \"First step tomorrow: …\", \"Open question: …\" " +
-        "(be concrete: files, functions, what's half-done). Then stop and end your turn.",
+        "(be concrete: files, functions, what's half-done). Then stop and end your turn." +
+        (readConfig().dream === "on"
+          ? ` If you have not yet written the dream, write DREAM.md first (proposals only, as the shutdown skill says); the handoff comes last because it ends the session.`
+          : ""),
     },
   }));
   // Exit 0 = the hook succeeded; the deny is carried by the JSON above.

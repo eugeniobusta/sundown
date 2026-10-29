@@ -12,7 +12,9 @@
 //   sundown config <key> <value>    change one (cutoff 21:00 · cutoff off · morning 08:00 ·
 //                                   ntfyTopic generate · ntfyTopic off · pushDetail folder ·
 //                                   minTurnSeconds 60 · overrideMinutes 20 ·
-//                                   daysOff sat,sun · daysOff off · wrapUpMinutes 30)
+//                                   daysOff sat,sun · daysOff off · wrapUpMinutes 30 ·
+//                                   dream on · dream off · dreamInstructions "focus on style")
+//   sundown dream clear             delete this folder's DREAM.md (after you applied or discarded it)
 //   sundown report [days]           the evening report (default 7 days, max 90)
 //   sundown test-push               send a test notification to your phone
 //   sundown statusline              one line for Claude Code's status bar
@@ -30,7 +32,7 @@ import { fileURLToPath } from "node:url";
 // Shared logic lives in lib.mjs so the hooks and this command agree on the rules.
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
-  nextCutoffAfter, reasonText, dayAndTime, DEFAULTS,
+  nextCutoffAfter, reasonText, dayAndTime, DEFAULTS, DREAM_FILE,
   // Minutes after midnight for "HH:MM"; used to compare cutoffs and mornings.
   toMinutes,
   // Used to check a value is allowed before deciding whether it would loosen Sundown.
@@ -75,7 +77,7 @@ function status() {
   // Off and no cutoff set yet: Sundown never blocks anything, so tell the user how to set one.
   else lines.push("☀ Sundown is off. No evening cutoff yet (run /sundown:setup). /sundown:shutdown still works.");
   // Second line always shows the main settings, with the phone topic masked.
-  lines.push(`Morning: ${cfg.morning} · Days off: ${cfg.daysOff || "none"} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
+  lines.push(`Morning: ${cfg.morning} · Days off: ${cfg.daysOff || "none"} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min · Dream at shutdown: ${cfg.dream}`);
   // Print both lines at once.
   console.log(lines.join("\n"));
 }
@@ -162,7 +164,7 @@ function config() {
   // A key with no value is a mistake, not a request to clear it, so stop with a helpful message.
   if (raw === "") {
     // Throwing lands in the catch at the bottom, which prints the message and exits 1.
-    throw new Error(`Give ${key} a value. (cutoff, daysOff, ntfyTopic and wrapUpMinutes also accept "off".)`);
+    throw new Error(`Give ${key} a value. (cutoff, daysOff, ntfyTopic, wrapUpMinutes and dreamInstructions also accept "off".)`);
   }
   // Pointing pushes at another server would send them (maybe with your folder name) there,
   // so only you may do that, at any time of day.
@@ -173,8 +175,8 @@ function config() {
   }
   // By default the value is the text exactly as typed.
   let value = raw;
-  // "off" for these three settings means empty (no cutoff, no push topic, no days off).
-  if (raw === "off" && (key === "cutoff" || key === "ntfyTopic" || key === "daysOff")) value = "";
+  // "off" for these settings means empty (no cutoff, no push topic, no days off, no dream instructions).
+  if (raw === "off" && (key === "cutoff" || key === "ntfyTopic" || key === "daysOff" || key === "dreamInstructions")) value = "";
   // For daysOff, lower-case it and remove all whitespace (\s+ matches any run of spaces or tabs) so "Sat, Sun" becomes "sat,sun".
   else if (key === "daysOff") value = raw.toLowerCase().replace(/\s+/g, "");
   // "generate" asks for a new random topic instead of a topic the user typed.
@@ -341,6 +343,18 @@ try {
       break;
     }
     case "config": config(); break;
+    case "dream": {
+      // Only one subcommand: clear. It deletes DREAM.md in the folder Claude Code is working in, once its proposals were applied or discarded.
+      if (args[0] !== "clear") throw new Error("Usage: sundown dream clear");
+      const file = path.join(process.cwd(), DREAM_FILE);
+      // lstat, not stat: never delete through a symlink, and never delete anything that isn't a plain file.
+      let st;
+      try { st = fs.lstatSync(file); } catch { console.log("No DREAM.md here."); break; }
+      if (!st.isFile()) throw new Error("DREAM.md here is not a plain file, so it was left alone.");
+      fs.unlinkSync(file);
+      console.log("DREAM.md deleted.");
+      break;
+    }
     case "report": {
       // Print the evening report. Days come from the first argument, as a whole number. A missing or non-numeric value gives NaN, and NaN || 7 falls back to 7. Then clamp to between 1 and 90.
       const days = Math.min(90, Math.max(1, parseInt(args[0], 10) || 7));
@@ -355,7 +369,7 @@ try {
     case "test-push": await testPush(); break;
     default:
       // Anything else, including "help": show the usage line.
-      console.log("Usage: sundown status | shutdown | wake | config [key value] | report [days] | test-push | statusline | install-statusline");
+      console.log("Usage: sundown status | shutdown | wake | config [key value] | report [days] | dream clear | test-push | statusline | install-statusline");
       // List every valid setting name, taken from the defaults.
       console.log(`Settings: ${Object.keys(DEFAULTS).join(", ")}`);
       // Exit with failure for an unknown command, but not for a help request. exitCode (not exit) lets pending output finish printing.

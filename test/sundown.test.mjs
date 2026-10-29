@@ -1281,3 +1281,117 @@ test("cli: `sundown config` shows wrapUpMinutes as off when it is 0", () => {
   // The printed settings say "off", not 0.
   assert.match(cli(w, ["config"]).out, /"wrapUpMinutes": "off"/);
 });
+
+// ---------------------------------------------------------------------------
+// Dream (1.2.0): shutdown also writes DREAM.md, a proposal to tidy Claude's memory
+// ---------------------------------------------------------------------------
+
+// Protects the defaults: the dream is on, has no steering text, and each setting rejects bad values.
+test("dream: on by default, and its settings are validated", async () => {
+  const { DEFAULTS, isValidSetting } = await import(script("lib.mjs"));
+  assert.equal(DEFAULTS.dream, "on");
+  assert.equal(DEFAULTS.dreamInstructions, "");
+  assert.equal(isValidSetting("dream", "off"), true);
+  assert.equal(isValidSetting("dream", "maybe"), false);
+  assert.equal(isValidSetting("dreamInstructions", "focus on coding style"), true);
+  // A newline would break the one line the text is quoted on, and 1001 characters is over the limit.
+  assert.equal(isValidSetting("dreamInstructions", "a\nb"), false);
+  assert.equal(isValidSetting("dreamInstructions", "x".repeat(1001)), false);
+});
+
+// Protects the CLI: set, show and clear the settings the way a person would.
+test("dream: `sundown config` sets dream and dreamInstructions, and `off` clears the instructions", () => {
+  const w = world();
+  assert.equal(cli(w, ["config", "dream", "off"]).code, 0);
+  assert.equal(cli(w, ["config", "dreamInstructions", "focus on style"]).code, 0);
+  assert.match(cli(w, ["status"]).out, /Dream at shutdown: off/);
+  assert.equal(JSON.parse(cli(w, ["config"]).out).dreamInstructions, "focus on style");
+  assert.equal(cli(w, ["config", "dreamInstructions", "off"]).code, 0);
+  assert.equal(JSON.parse(cli(w, ["config"]).out).dreamInstructions, "");
+  assert.notEqual(cli(w, ["config", "dream", "maybe"]).code, 0);
+});
+
+// Protects the shutdown message: Claude is told whether to dream, and the user's steering text reaches it.
+test("dream: the shutdown hook tells Claude to dream, or not to, and passes the instructions", () => {
+  const w = world({ cutoff: "21:00", morning: "08:00", dreamInstructions: "focus on style" });
+  const on = hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  assert.match(on.out, /Sundown dream: ON/);
+  assert.match(on.out, /focus on style/);
+  const off = world({ cutoff: "21:00", morning: "08:00", dream: "off" });
+  assert.match(hook(off, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00").out, /Sundown dream: OFF/);
+});
+
+// Protects the main safety rule: during shutdown the dream can write DREAM.md and nothing else, so it can only propose.
+test("dream: during shutdown DREAM.md can be written, memory files cannot, and the handoff still stops the agent", () => {
+  const w = world();
+  hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  const write = (file) => hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: file } }, "2026-10-29T18:01:00");
+  // The dream and the handoff are allowed (no output = allow).
+  assert.equal(write(path.join(w.project, "DREAM.md")).out, "");
+  assert.equal(write("DREAM.md").out, "");
+  assert.equal(write(path.join(w.project, "TOMORROW.md")).out, "");
+  // A memory file, CLAUDE.md, and a DREAM.md in another folder are all denied.
+  for (const f of [path.join(w.claude, "memory", "MEMORY.md"), path.join(w.project, "CLAUDE.md"), path.join(os.tmpdir(), "DREAM.md")]) {
+    assert.match(write(f).out, /"permissionDecision":"deny"/, f);
+  }
+  // The handoff, once written, ends the run as before.
+  fs.writeFileSync(path.join(w.project, "TOMORROW.md"), "Stopped at: x\nFirst step tomorrow: y\nOpen question: none\n");
+  assert.equal(JSON.parse(hook(w, "pause.mjs", { tool_name: "Read", tool_input: { file_path: "a.js" } }, "2026-10-29T18:02:00").out).continue, false);
+});
+
+// Protects the off switch, and the symlink rule: a DREAM.md that is a link could point anywhere, so it's never written through.
+test("dream: with dream off, or with DREAM.md a symlink, the write is denied", () => {
+  const off = world({ cutoff: "21:00", morning: "08:00", dream: "off" });
+  hook(off, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  assert.match(hook(off, "pause.mjs", { tool_name: "Write", tool_input: { file_path: path.join(off.project, "DREAM.md") } }, "2026-10-29T18:01:00").out, /deny/);
+  const w = world();
+  hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  fs.symlinkSync(path.join(w.state, "elsewhere"), path.join(w.project, "DREAM.md"));
+  assert.match(hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: path.join(w.project, "DREAM.md") } }, "2026-10-29T18:01:00").out, /deny/);
+});
+
+// Protects the morning: the dream is announced, never pasted in or applied, and it shows even without a handoff.
+test("dream: the morning points at DREAM.md without pasting it into the session", () => {
+  const w = world();
+  fs.writeFileSync(path.join(w.project, "DREAM.md"), "# Dream\nSECRET-DREAM-CONTENT\n");
+  // Dream only, no handoff.
+  let r = hook(w, "morning.mjs", { source: "startup" }, "2026-10-30T08:30:00");
+  assert.match(JSON.parse(r.out).systemMessage, /dream is in DREAM\.md/);
+  assert.ok(!r.out.includes("SECRET-DREAM-CONTENT"));
+  // Dream and handoff together.
+  fs.writeFileSync(path.join(w.project, "TOMORROW.md"), "Stopped at: x\nFirst step tomorrow: y\nOpen question: none\n");
+  r = hook(w, "morning.mjs", { source: "startup" }, "2026-10-30T08:31:00");
+  const msg = JSON.parse(r.out);
+  assert.match(msg.systemMessage, /Good morning/);
+  assert.match(msg.systemMessage, /\/sundown:dream apply/);
+  assert.ok(!r.out.includes("SECRET-DREAM-CONTENT"));
+  // No dream, no dream line.
+  fs.rmSync(path.join(w.project, "DREAM.md"));
+  assert.ok(!hook(w, "morning.mjs", { source: "startup" }, "2026-10-30T08:32:00").out.includes("dream"));
+  assert.match(fs.readFileSync(path.join(w.state, "events.log"), "utf8"), /"type":"dream"/);
+});
+
+// Protects `sundown dream clear`: deletes a plain DREAM.md in the current folder, and refuses to touch anything else.
+test("dream: `sundown dream clear` deletes only a plain DREAM.md in the current folder", () => {
+  const w = world();
+  const run = (args) => spawnSync("node", [BIN, ...args], { cwd: w.project, encoding: "utf8", env: { ...process.env, SUNDOWN_DIR: w.state, CLAUDE_CONFIG_DIR: w.claude } });
+  assert.match(run(["dream", "clear"]).stdout, /No DREAM\.md here/);
+  fs.writeFileSync(path.join(w.project, "DREAM.md"), "x");
+  assert.match(run(["dream", "clear"]).stdout, /deleted/);
+  assert.ok(!fs.existsSync(path.join(w.project, "DREAM.md")));
+  // A folder named DREAM.md is refused, and so is an unknown subcommand.
+  fs.mkdirSync(path.join(w.project, "DREAM.md"));
+  assert.notEqual(run(["dream", "clear"]).status, 0);
+  assert.notEqual(run(["dream", "bogus"]).status, 0);
+});
+
+// Protects the skills: shutdown dreams BEFORE the handoff and never edits memory; the dream skill is user-only and cleans up through the CLI.
+test("dream: the skills say dream first, propose only, and apply only when asked", () => {
+  const shutdown = fs.readFileSync(path.join(ROOT, "skills", "shutdown", "SKILL.md"), "utf8");
+  assert.ok(shutdown.indexOf("2. **Dream") < shutdown.indexOf("3. Write `TOMORROW.md`"), "dream comes before the handoff step");
+  assert.match(shutdown, /Do NOT edit any memory file/);
+  const dream = fs.readFileSync(path.join(ROOT, "skills", "dream", "SKILL.md"), "utf8");
+  assert.match(dream, /disable-model-invocation: true/);
+  assert.match(dream, /sundown dream clear/);
+  assert.match(dream, /Nothing has been changed until this command applies it/);
+});
