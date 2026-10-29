@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.4
+
+Found by a medium-effort bug scan of every branch; the first was reproduced before it was fixed.
+
+### Fixed
+- **`/sundown:setup` failed halfway when run in the evening.** It set the cutoff first, which switched Sundown on, and the guard then refused the next steps (`morning`, `daysOff`), so a stranger setting up after their own cutoff got a half-finished setup, against what the README promised. Two changes: the guard now refuses only changes that actually loosen Sundown (switch it off now, end the night sooner, raise the override length), and the setup skill applies the cutoff last and tells Claude to hand a refused command to you instead of working around it.
+
+### Tests
+- 54 tests (was 49). New ones cover: setup finishing in the evening, what the guard does and doesn't refuse, the setup skill's order, and the read-only shell check refusing the three bypasses the scan tried (`rg --pre`, `sort --compress-program`, `git diff --ext-diff`; these were already closed in 1.1.3, the tests keep them closed).
+
 ## 1.1.3
 
 Found by an independent code review; each one was reproduced before it was fixed.

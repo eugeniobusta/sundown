@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
   nextCutoffAfter, reasonText, dayAndTime, DEFAULTS,
+  isValidSetting,
 } from "../scripts/lib.mjs";
 import { buildReport } from "../scripts/report.mjs";
 import { send } from "../scripts/push.mjs";
@@ -59,6 +60,19 @@ function status() {
 // Settings that make Sundown less strict.
 const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
 
+// Would this change make Sundown less strict than it is right now? Only meaningful while
+// Sundown is on. It does if it would switch Sundown off now, end the quiet period sooner
+// (an earlier morning, or removing a day off), or lengthen what one "override:" allows.
+// Anything that keeps or tightens it (a later morning, an extra day off) is fine, which is
+// what lets /sundown:setup finish even after it has just switched Sundown on.
+function loosens(key, value) {
+  const current = sundownState(date, cfg);
+  if (!current.why) return false;
+  if (key === "overrideMinutes") return value > cfg.overrideMinutes;
+  const after = sundownState(date, { ...cfg, [key]: value });
+  return !after.why || after.until < current.until;
+}
+
 // A number, or the original text if it isn't one (so the error shows what you typed).
 const num = (s) => { const n = Number(s); return Number.isNaN(n) ? s : n; };
 
@@ -70,11 +84,6 @@ function config() {
   const [key, raw = ""] = args;
   if (raw === "") {
     throw new Error(`Give ${key} a value. (cutoff, daysOff, ntfyTopic and wrapUpMinutes also accept "off".)`);
-  }
-  // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
-  // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
-  if ("CLAUDECODE" in process.env && LOOSENING.has(key) && sundownState(date, cfg).why) {
-    throw new Error(`Sundown is on, so only you can change ${key}. Run this in your own terminal, or wait until it's off.`);
   }
   // Pointing pushes at another server would send them (maybe with your folder name) there,
   // so only you may do that, at any time of day.
@@ -90,6 +99,12 @@ function config() {
   }
   if (key === "minTurnSeconds" || key === "overrideMinutes") value = num(raw);
   if (key === "wrapUpMinutes") value = raw === "off" ? 0 : num(raw);
+  // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
+  // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
+  // (An invalid value falls through to setConfig below, which explains what is wrong with it.)
+  if ("CLAUDECODE" in process.env && LOOSENING.has(key) && isValidSetting(key, value) && loosens(key, value)) {
+    throw new Error(`Sundown is on, and that would loosen it, so only you can change ${key}. Run \`sundown config ${key} ${raw}\` in your own terminal, or wait until it's off.`);
+  }
   setConfig(key, value); // throws a readable error on a bad key or value
   if (key === "ntfyTopic" && value) {
     console.log(`Phone pushes ON. In the ntfy app, subscribe to this topic (keep it private):\n${value}`);
