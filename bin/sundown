@@ -56,12 +56,26 @@ function status() {
   console.log(lines.join("\n"));
 }
 
+// Settings that make Sundown less strict.
+const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
+
+// A number, or the original text if it isn't one (so the error shows what you typed).
+const num = (s) => { const n = Number(s); return Number.isNaN(n) ? s : n; };
+
 function config() {
   if (args.length === 0) {
-    console.log(JSON.stringify({ ...cfg, ntfyTopic: mask(cfg.ntfyTopic) }, null, 2));
+    console.log(JSON.stringify({ ...cfg, cutoff: cfg.cutoff || "off", daysOff: cfg.daysOff || "none", ntfyTopic: mask(cfg.ntfyTopic) }, null, 2));
     return;
   }
   const [key, raw = ""] = args;
+  if (raw === "") {
+    throw new Error(`Give ${key} a value. (cutoff, daysOff, ntfyTopic and wrapUpMinutes also accept "off".)`);
+  }
+  // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
+  // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
+  if (process.env.CLAUDECODE && LOOSENING.has(key) && sundownState(date, cfg).why) {
+    throw new Error(`Sundown is on, so only you can change ${key}. Run this in your own terminal, or wait until it's off.`);
+  }
   let value = raw;
   if (raw === "off" && (key === "cutoff" || key === "ntfyTopic" || key === "daysOff")) value = "";
   else if (key === "daysOff") value = raw.toLowerCase().replace(/\s+/g, "");
@@ -69,11 +83,14 @@ function config() {
     // 96 random bits: nobody can guess it, so nobody else can read or send your pushes.
     value = `sundown-${crypto.randomBytes(12).toString("hex")}`;
   }
-  if (key === "minTurnSeconds" || key === "overrideMinutes") value = Number(raw);
-  if (key === "wrapUpMinutes") value = raw === "off" ? 0 : Number(raw);
+  if (key === "minTurnSeconds" || key === "overrideMinutes") value = num(raw);
+  if (key === "wrapUpMinutes") value = raw === "off" ? 0 : num(raw);
   setConfig(key, value); // throws a readable error on a bad key or value
   if (key === "ntfyTopic" && value) {
     console.log(`Phone pushes ON. In the ntfy app, subscribe to this topic (keep it private):\n${value}`);
+    if (value.length < 16) {
+      console.log("Warning: that topic is short and easy to guess, and anyone who guesses it can read your pushes. `sundown config ntfyTopic generate` makes a safe one.");
+    }
   } else {
     console.log(`${key} = ${value === "" ? "off" : value}`);
   }
@@ -82,7 +99,7 @@ function config() {
 function statusline() {
   // Claude Code sends session JSON on stdin; we don't need it, so we don't read it.
   const s = sundownState(date, cfg);
-  if (s.why === "lock") return console.log(`☾ Shut down · back ${hhmm(s.until)}`);
+  if (s.why === "lock") return console.log(`☾ Shut down · back ${dayAndTime(s.until)}`);
   if (s.why === "quiet") return console.log(`☾ After sundown · "override:" to send`);
   if (s.why === "dayoff") return console.log(`☾ Day off · back ${dayAndTime(s.until)}`);
   if (!cfg.cutoff) return console.log("☀ Sundown: no cutoff set");
@@ -105,18 +122,21 @@ function installStatusline() {
     }
   }
   const current = settings.statusLine;
-  if (current && !String(current.command || "").includes("sundown") && !args.includes("--force")) {
+  // Ours means exactly the command this script installs, wherever the plugin lives,
+  // not any command that happens to contain the word "sundown".
+  const ours = Boolean(current) && /[\/\\]bin[\/\\]sundown" statusline$/.test(String(current.command || ""));
+  if (current && !ours && !args.includes("--force")) {
     console.error(`You already have a status line:\n  ${JSON.stringify(current)}\nNot replacing it. Re-run with --force to replace it (a backup is kept).`);
     process.exit(1);
   }
   // Back up only while the status line is still yours: re-running after an update
   // must not replace your original backup with a copy that already points at Sundown.
-  const ours = current && String(current.command || "").includes("sundown");
-  if (fs.existsSync(file) && !ours) fs.copyFileSync(file, `${file}.sundown-backup`);
+  const backedUp = fs.existsSync(file) && !ours;
+  if (backedUp) fs.copyFileSync(file, `${file}.sundown-backup`);
   settings.statusLine = wanted;
   fs.mkdirSync(base, { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
-  console.log(`Status line installed in ${file} (backup: settings.json.sundown-backup).\nIt points at this copy of the plugin; run this again after updating Sundown.`);
+  console.log(`Status line installed in ${file}${backedUp ? " (your previous settings are saved as settings.json.sundown-backup)" : ""}.\nIt points at this copy of the plugin; run this again after updating Sundown.`);
 }
 
 async function testPush() {
@@ -144,13 +164,16 @@ try {
     case "shutdown": {
       const lock = lockOn(date, cfg);
       logEvent("shutdown");
-      console.log(`☾ Shut down until ${hhmm(new Date(lock.until))}.`);
+      console.log(`☾ Shut down until ${dayAndTime(new Date(lock.until))}.`);
       break;
     }
     case "wake": {
+      const wasOn = Boolean(sundownState(date, cfg).why);
       const until = wake(date, cfg);
       logEvent("wake");
-      console.log(`☀ Sundown is off until ${hhmm(until)}.`);
+      console.log(wasOn
+        ? `☀ Sundown is off until ${hhmm(until)}.`
+        : `☀ Sundown wasn't on. It stays off until ${hhmm(until)} (your next cutoff).`);
       break;
     }
     case "config": config(); break;
@@ -166,6 +189,7 @@ try {
     default:
       console.log("Usage: sundown status | shutdown | wake | config [key value] | report [days] | test-push | statusline | install-statusline");
       console.log(`Settings: ${Object.keys(DEFAULTS).join(", ")}`);
+      if (!["help", "--help", "-h"].includes(command)) process.exitCode = 1; // unknown command
   }
 } catch (err) {
   console.error(`sundown: ${err.message}`);

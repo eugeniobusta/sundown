@@ -136,12 +136,14 @@ export function summarise({ prompts, events, date, cfg, days }) {
   let latest = null;
   for (const r of rows) if (r.last && (!latest || lateness(r.last, cfg) > lateness(latest.last, cfg))) latest = r;
 
-  // Typical finish: the average time of each active day's last prompt, counted from the
-  // morning so 23:00 and 01:00 average to midnight, not to noon.
+  // Typical finish: the MEDIAN time of each active day's last prompt, so one very late
+  // night doesn't drag it. Counted from the morning, so 23:00 and 01:00 give midnight.
   let typicalFinish = null;
   if (active.length) {
-    const avg = Math.round(active.reduce((sum, r) => sum + lateness(r.last, cfg), 0) / active.length);
-    const m = (avg + toMinutes(cfg.morning)) % 1440;
+    const sorted = active.map((r) => lateness(r.last, cfg)).sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = Math.round(sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
+    const m = (median + toMinutes(cfg.morning)) % 1440;
     typicalFinish = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   }
   const daysOff = rows.filter((r) => r.dayOff);

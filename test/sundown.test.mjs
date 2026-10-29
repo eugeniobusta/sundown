@@ -452,14 +452,6 @@ test("report: compares with the week before and counts mornings that started fro
   assert.match(r.out, /Mornings that started from TOMORROW\.md: 1/);
 });
 
-test("cli: the status line follows wrapUpMinutes instead of a fixed 30 minutes", () => {
-  const w = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 10 });
-  assert.match(cli(w, ["statusline"], "2026-10-29T20:35:00").out, /^☀ 25m to sundown/); // 25 min left, window is 10
-  assert.match(cli(w, ["statusline"], "2026-10-29T20:55:00").out, /time to wrap up/);
-  const off = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 0 });
-  assert.match(cli(off, ["statusline"], "2026-10-29T20:55:00").out, /^☀ 5m to sundown/);
-});
-
 test("pause: while locked, plain read-only shell commands are allowed so Claude can inspect the project", () => {
   const w = world();
   hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
@@ -470,4 +462,154 @@ test("pause: while locked, plain read-only shell commands are allowed so Claude 
   for (const bad of ["rm -rf .", "ls; rm -rf .", "cat a > b", "echo $(whoami)", "find . -delete", "find . -exec rm {} +", "git push", "git commit -am x", "npm test", "sundown wake", "ls && npm test"]) {
     assert.equal(JSON.parse(bash(bad)).hookSpecificOutput.permissionDecision, "deny", `should deny: ${bad}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Fixes from the agent test round (1.1.1)
+// ---------------------------------------------------------------------------
+
+// Run the CLI like Claude's shell (CLAUDECODE=1) or like your own terminal (unset).
+function cliAs(who, w, args, nowIso = "2026-10-29T15:00:00") {
+  const env = { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: nowIso, CLAUDE_CONFIG_DIR: w.claude };
+  if (who === "claude") env.CLAUDECODE = "1"; else delete env.CLAUDECODE;
+  const r = spawnSync("node", [BIN, ...args], { env, encoding: "utf8" });
+  return { code: r.status, out: r.stdout, err: r.stderr };
+}
+
+test("pause: once the handoff exists the triggering tool call is denied AND the run stops", () => {
+  const w = world();
+  hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  const handoff = path.join(w.project, "TOMORROW.md");
+  fs.writeFileSync(handoff, "Stopped at: x\nFirst step tomorrow: y\nOpen question: none\n");
+  const out = JSON.parse(hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command: "echo hi" } }, "2026-10-29T18:03:00").out);
+  assert.equal(out.continue, false);
+  assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("pause: MultiEdit may write the handoff, but a symlinked TOMORROW.md is never written through", () => {
+  const w = world();
+  hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  const handoff = path.join(w.project, "TOMORROW.md");
+  assert.equal(hook(w, "pause.mjs", { tool_name: "MultiEdit", tool_input: { file_path: handoff } }, "2026-10-29T18:01:00").out, "");
+  const victim = path.join(tmp("sd-victim-"), "victim.txt");
+  fs.writeFileSync(victim, "keep me");
+  fs.symlinkSync(victim, handoff);
+  const r = hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: handoff } }, "2026-10-29T18:01:00");
+  assert.notEqual(r.out, "");
+});
+
+test("gate: a non-text cwd can't let a blocked prompt through", () => {
+  const w = world();
+  const r = spawnSync("node", [script("gate.mjs")], {
+    input: JSON.stringify({ session_id: "s", cwd: 123, prompt: "hi" }),
+    env: { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: "2026-10-29T23:00:00" }, encoding: "utf8",
+  });
+  assert.equal(r.status, 2);
+});
+
+test("cli: install-statusline only treats its own command as its own", () => {
+  const w = world();
+  const settings = path.join(w.claude, "settings.json");
+  fs.writeFileSync(settings, JSON.stringify({ statusLine: { type: "command", command: "~/sundown-dashboard/my-line.sh" } }));
+  const r = cli(w, ["install-statusline"]);
+  assert.equal(r.code, 1);
+  assert.match(fs.readFileSync(settings, "utf8"), /sundown-dashboard/);
+  assert.equal(cli(w, ["install-statusline", "--force"]).code, 0);
+  assert.equal(cli(w, ["install-statusline"]).code, 0); // now it IS ours
+});
+
+test("cli: install-statusline only mentions a backup when it made one", () => {
+  const w = world();
+  const first = cli(w, ["install-statusline"]); // no settings.json yet
+  assert.doesNotMatch(first.out, /backup|saved as/);
+  const settings = path.join(w.claude, "settings.json");
+  fs.writeFileSync(settings, JSON.stringify({ theme: "dark" }));
+  assert.match(cli(w, ["install-statusline", "--force"]).out, /saved as settings\.json\.sundown-backup/);
+});
+
+test("cli: while Sundown is on, Claude can't loosen it; before the cutoff and in your own terminal it can", () => {
+  const w = world();
+  const night = "2026-10-29T22:00:00";
+  for (const [key, value] of [["cutoff", "off"], ["morning", "06:00"], ["daysOff", "sat"], ["overrideMinutes", "240"]]) {
+    const r = cliAs("claude", w, ["config", key, value], night);
+    assert.equal(r.code, 1, `${key} should be refused`);
+    assert.match(r.err, /only you can change/);
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "21:00");
+  assert.equal(cliAs("you", w, ["config", "overrideMinutes", "30"], night).code, 0);          // your terminal
+  assert.equal(cliAs("claude", w, ["config", "cutoff", "22:00"], "2026-10-29T15:00:00").code, 0); // setup, daytime
+  assert.equal(cliAs("claude", w, ["config", "pushDetail", "folder"], night).code, 0);          // not a loosening setting
+});
+
+test("cli: config needs a value and shows what you typed when it's wrong", () => {
+  const w = world();
+  for (const args of [["config", "cutoff"], ["config", "daysOff", ""], ["config", "wrapUpMinutes"]]) {
+    assert.equal(cli(w, args).code, 1, args.join(" "));
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "21:00"); // not wiped
+  const bad = cli(w, ["config", "wrapUpMinutes", "abc"]);
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /"abc" is not a valid value/);
+  assert.match(cli(w, ["config"]).out, /"daysOff": "none"/);
+});
+
+test("cli: the status bar follows wrapUpMinutes", () => {
+  const w = world();
+  assert.match(cli(w, ["statusline"], "2026-10-29T20:45:00").out, /time to wrap up/);
+  cli(w, ["config", "wrapUpMinutes", "10"], "2026-10-29T15:00:00");
+  assert.doesNotMatch(cli(w, ["statusline"], "2026-10-29T20:45:00").out, /wrap up/);
+  assert.match(cli(w, ["statusline"], "2026-10-29T20:55:00").out, /time to wrap up/);
+  cli(w, ["config", "wrapUpMinutes", "off"], "2026-10-29T15:00:00");
+  assert.doesNotMatch(cli(w, ["statusline"], "2026-10-29T20:55:00").out, /wrap up/);
+});
+
+test("days off: shutting down on a day off lasts to the next working morning and says so", () => {
+  const w = world({ cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" });
+  const r = hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-31T10:00:00"); // Saturday
+  assert.match(r.out, /ON until Mon 08:00/);
+  assert.match(cliAs("you", w, ["status"], "2026-10-31T12:00:00").out, /shut down for today \(until Mon 08:00\)/); // Monday is >24h away
+  assert.match(cliAs("you", w, ["status"], "2026-11-01T12:00:00").out, /shut down for today \(until 08:00\)/);     // Monday is tomorrow
+});
+
+test("cli: wake says when Sundown wasn't on, and an unknown command is an error", () => {
+  const w = world();
+  assert.match(cliAs("you", w, ["wake"], "2026-10-29T15:00:00").out, /wasn't on/);
+  assert.match(cliAs("you", w, ["wake"], "2026-10-29T22:00:00").out, /off until/);
+  assert.equal(cli(w, ["bogus"]).code, 1);
+  assert.equal(cli(w, ["help"]).code, 0);
+});
+
+test("cli: a short ntfy topic gets a warning, a generated one doesn't", () => {
+  const w = world();
+  assert.match(cli(w, ["config", "ntfyTopic", "abc"]).out, /easy to guess/);
+  assert.doesNotMatch(cli(w, ["config", "ntfyTopic", "generate"]).out, /easy to guess/);
+});
+
+test("state: a folder and config.json that already exist with open permissions get tightened", () => {
+  const w = world();
+  fs.chmodSync(w.state, 0o755);
+  fs.chmodSync(path.join(w.state, "config.json"), 0o644);
+  hook(w, "gate.mjs", { prompt: "hi" }, "2026-10-29T15:00:00");
+  assert.equal(fs.statSync(w.state).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(w.state, "config.json")).mode & 0o777, 0o600);
+});
+
+test("morning: the setup nudge doesn't hide the shutdown reminder", () => {
+  const state = tmp("sd-state-");
+  const w = { state, project: tmp("sd-proj-"), claude: tmp("sd-claude-") };
+  hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  const msg = JSON.parse(hook(w, "morning.mjs", {}, "2026-10-29T23:00:00").out).systemMessage;
+  assert.match(msg, /shut down for today/);
+  assert.match(msg, /\/sundown:setup/);
+});
+
+test("report: typical finish is the median, so one very late night doesn't skew it", () => {
+  const w = world();
+  const proj = path.join(w.claude, "projects", "-Users-me-app");
+  fs.mkdirSync(proj, { recursive: true });
+  const line = (uuid, iso) => JSON.stringify({ type: "user", uuid, timestamp: new Date(iso).toISOString(), message: { content: "x" } }) + "\n";
+  fs.writeFileSync(path.join(proj, "s.jsonl"),
+    line("a", "2026-10-26T17:00:00") + line("b", "2026-10-27T17:30:00") + line("c", "2026-10-28T23:50:00"));
+  const r = cli(w, ["report", "7"], "2026-10-29T15:00:00");
+  assert.match(r.out, /Typical finish: 17:30/); // an average would say 19:40
 });

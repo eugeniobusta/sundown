@@ -28,7 +28,7 @@ import path from "node:path";
 import {
   readHookInput, readConfig, now, sundownState, recordTurnStart,
   grantPass, hasPass, logEvent, hhmm, lockOn, wake, projectDir,
-  reasonText, minutesToCutoff, claimWrapUp,
+  reasonText, minutesToCutoff, claimWrapUp, dayAndTime,
 } from "./lib.mjs";
 
 const REASON_NAME = { lock: "after the user's shutdown", quiet: "after the user's evening cutoff", dayoff: "the user's day off" };
@@ -47,7 +47,7 @@ try {
   if (/^\/sundown:shutdown\b/i.test(prompt)) {
     const lock = lockOn(date, cfg);
     logEvent("shutdown");
-    console.log(`Sundown: the shutdown lock is now ON until ${hhmm(new Date(lock.until))}.`);
+    console.log(`Sundown: the shutdown lock is now ON until ${dayAndTime(new Date(lock.until))}.`);
     process.exit(0);
   }
   if (/^\/sundown:wake\b/i.test(prompt)) {

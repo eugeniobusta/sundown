@@ -68,14 +68,27 @@ export function isValidSetting(key, value) {
 export function stateDir() {
   const dir = process.env.SUNDOWN_DIR || path.join(os.homedir(), ".sundown");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  tighten(dir, 0o700);
   return dir;
+}
+
+// "mode" only applies to things we create. If the folder or file already existed with
+// looser permissions (older install, or made by hand), make it private. Only ever
+// touches things you own.
+function tighten(target, mode) {
+  try {
+    const st = fs.statSync(target);
+    if ((st.mode & 0o077) && st.uid === process.getuid()) fs.chmodSync(target, mode);
+  } catch { /* nothing to tighten */ }
 }
 
 // Read config.json and keep only valid values; anything else falls back to the default.
 export function readConfig() {
   const cfg = { ...DEFAULTS };
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(stateDir(), "config.json"), "utf8"));
+    const file = path.join(stateDir(), "config.json");
+    tighten(file, 0o600);
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
     for (const key of Object.keys(DEFAULTS)) {
       if (key in raw && isValidSetting(key, raw[key])) cfg[key] = raw[key];
     }
@@ -198,7 +211,7 @@ function readJsonFile(file) {
 
 export function lockOn(date, cfg) {
   // setAtReal is the real clock, for comparing with file times when SUNDOWN_NOW fakes "now".
-  const lock = { setAt: date.toISOString(), setAtReal: new Date().toISOString(), until: nextMorningAfter(date, cfg).toISOString() };
+  const lock = { setAt: date.toISOString(), setAtReal: new Date().toISOString(), until: nextWorkMorningAfter(date, cfg).toISOString() };
   fs.writeFileSync(path.join(stateDir(), "lock"), JSON.stringify(lock) + "\n", { mode: 0o600 });
   // Shutting down cancels any earlier "wake" and every override pass still running.
   fs.rmSync(path.join(stateDir(), "awake"), { force: true });
@@ -251,7 +264,7 @@ export function sundownState(date, cfg) {
 
 // Why Sundown is on, as the end of a sentence: "☾ Sundown: <reason>."
 export function reasonText(state, cfg) {
-  if (state.why === "lock") return `you shut down for today (until ${hhmm(state.until)})`;
+  if (state.why === "lock") return `you shut down for today (until ${dayAndTime(state.until)})`;
   if (state.why === "dayoff") return `it's your day off (until ${dayAndTime(state.until)})`;
   return `it's after your ${cfg.cutoff} cutoff (until ${dayAndTime(state.until)})`;
 }
@@ -400,7 +413,8 @@ export async function readHookInput() {
 
 // The project folder the hook is about.
 export function projectDir(input) {
-  return input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  if (typeof input.cwd === "string" && input.cwd) return input.cwd;
+  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
 
 // Where Claude Code keeps session transcripts (respects CLAUDE_CONFIG_DIR).
