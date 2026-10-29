@@ -26,10 +26,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
-  nextCutoffAfter, DEFAULTS,
+  nextCutoffAfter, DEFAULTS, todaysCount,
 } from "../scripts/lib.mjs";
 import { buildReport } from "../scripts/report.mjs";
 import { send } from "../scripts/push.mjs";
+import { readRecap, saveRecap, RECAP_PATH } from "../scripts/recap.mjs";
 
 const [command = "help", ...args] = process.argv.slice(2);
 const cfg = readConfig();
@@ -50,9 +51,11 @@ function status() {
   const lines = [];
   if (s.why === "lock") lines.push(`☾ Sundown is ON: you shut down for today. Back at ${hhmm(s.until)}.`);
   else if (s.why === "quiet") lines.push(`☾ Sundown is ON: it's after your ${cfg.cutoff} cutoff. Back at ${hhmm(s.until)}.`);
+  else if (s.why === "limit") lines.push(`☾ Sundown is ON: you've hit today's ${cfg.dailyLimit}-prompt limit. Back at ${hhmm(s.until)}.`);
   else if (cfg.cutoff) lines.push(`☀ Sundown is off. Your cutoff is ${cfg.cutoff}, in ${duration(nextCutoffAfter(date, cfg) - date)}.`);
-  else lines.push("☀ Sundown is off. No evening cutoff yet (run /sundown:setup). /sundown:shutdown still works.");
-  lines.push(`Morning: ${cfg.morning} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
+  else lines.push("☀ Sundown is off. No evening cutoff yet. /sundown:shutdown still works.");
+  const limitStr = cfg.dailyLimit > 0 ? `${todaysCount(date, cfg)}/${cfg.dailyLimit}` : "unlimited";
+  lines.push(`Prompts today: ${limitStr} · Morning: ${cfg.morning} · Phone pushes: ${mask(cfg.ntfyTopic)} · Override lasts ${cfg.overrideMinutes} min`);
   console.log(lines.join("\n"));
 }
 
@@ -129,8 +132,19 @@ try {
     case "status": status(); break;
     case "shutdown": {
       const lock = lockOn(date, cfg);
+      saveRecap({ projectDir: process.cwd(), since: new Date(date.getTime() - 12 * 3600 * 1000), date });
       logEvent("shutdown");
-      console.log(`☾ Shut down until ${hhmm(new Date(lock.until))}.`);
+      console.log(`☾ Shut down until ${hhmm(new Date(lock.until))}. Recap saved to ${RECAP_PATH()}.`);
+      break;
+    }
+    case "recap": {
+      if (args[0] === "--save") {
+        const md = saveRecap({ projectDir: process.cwd(), since: new Date(date.getTime() - 12 * 3600 * 1000), date });
+        process.stdout.write(md || "(nothing to save)\n");
+      } else {
+        const md = readRecap();
+        process.stdout.write(md || `No recap yet. Run /sundown:shutdown (or 'sundown recap --save' from a project folder) to create one.\n`);
+      }
       break;
     }
     case "wake": {
@@ -150,7 +164,7 @@ try {
     case "install-statusline": installStatusline(); break;
     case "test-push": await testPush(); break;
     default:
-      console.log("Usage: sundown status | shutdown | wake | config [key value] | report [days] | test-push | statusline | install-statusline");
+      console.log("Usage: sundown status | shutdown | wake | recap [--save] | config [key value] | report [days] | test-push | statusline | install-statusline");
       console.log(`Settings: ${Object.keys(DEFAULTS).join(", ")}`);
   }
 } catch (err) {

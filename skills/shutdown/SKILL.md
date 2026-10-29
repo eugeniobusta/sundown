@@ -17,6 +17,6 @@ Do exactly this, then stop:
    Open question: <the one thing that is unresolved, or "none">
    ```
 
-3. Reply with one line: "TOMORROW.md is saved. Sundown is on until <time>. See you tomorrow."
+3. Reply with one line: "TOMORROW.md is saved. Sundown is on until <time>. See you tomorrow." The hook already saved a recap (git log + diff + TOMORROW.md) to `~/.sundown/recap.md`; the user can view it with `/sundown:recap`.
 
 Don't start, finish or fix anything else. Don't suggest more work. Don't run commands.

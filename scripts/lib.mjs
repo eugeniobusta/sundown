@@ -26,17 +26,19 @@ export const DEFAULTS = Object.freeze({
   cutoff: "",               // when your evening starts (24h, local time). "" = no evening cutoff
                             // until you choose one in /sundown:setup (so installing never blocks you)
   morning: "08:00",         // when your day starts again
+  dailyLimit: 50,           // max human prompts counted per workday (0 = unlimited)
   ntfyTopic: "",            // phone pushes are OFF until you set a topic
   ntfyServer: "https://ntfy.sh",
   pushDetail: "none",       // "none" = generic text; "folder" = include the project folder name
   minTurnSeconds: 60,       // only push "Claude finished" after turns at least this long
-  overrideMinutes: 20,      // how long one "override:" lets that session work
+  overrideMinutes: 15,      // default pass length when override has no explicit duration
 });
 
 // Each setting has a validator, so a typo in config.json can never break a hook.
 const VALID = {
   cutoff: (v) => v === "" || (typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v)),
   morning: (v) => typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v),
+  dailyLimit: (v) => Number.isInteger(v) && v >= 0 && v <= 10000,
   // ntfy topic names: letters, digits, _ and -, up to 64 chars. Empty = off.
   ntfyTopic: (v) => typeof v === "string" && /^[A-Za-z0-9_-]{0,64}$/.test(v),
   ntfyServer: (v) => typeof v === "string" && /^https?:\/\/[^\s/]+(\/[^\s]*)?$/.test(v),
@@ -193,13 +195,67 @@ function awakeUntil(date) {
 }
 
 // The one question every hook asks: is Sundown active right now, and why?
-// Returns { why: "lock" | "quiet" | null, until: Date | null }.
+// Returns { why: "lock" | "quiet" | "limit" | null, until: Date | null }.
+// "limit" means today's prompt count hit the configured dailyLimit.
 export function sundownState(date, cfg) {
   if (awakeUntil(date)) return { why: null, until: null };
   const lock = lockState(date);
   if (lock && lock.active) return { why: "lock", until: lock.until };
   if (isQuiet(date, cfg)) return { why: "quiet", until: nextMorningAfter(date, cfg) };
+  if (cfg.dailyLimit > 0 && todaysCount(date, cfg) >= cfg.dailyLimit) {
+    return { why: "limit", until: nextMorningAfter(date, cfg), count: todaysCount(date, cfg), limit: cfg.dailyLimit };
+  }
   return { why: null, until: null };
+}
+
+// ---------------------------------------------------------------------------
+// Daily prompt counts (concurrent-safe)
+// ---------------------------------------------------------------------------
+//
+// Each real human prompt appends ONE short line to
+//   ~/.sundown/counts/<YYYY-MM-DD>
+// using fs.appendFileSync, which opens with O_APPEND. For writes smaller than
+// PIPE_BUF (4096+ bytes on every supported platform), POSIX guarantees the
+// append is atomic — two Claude Code sessions can increment at the same time
+// without stepping on each other. The file never stores prompt text; only an
+// ISO timestamp per line, which lets the recap and tests reason about it.
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+// The calendar workday a moment belongs to, as "YYYY-MM-DD".
+// If a prompt lands before the user's morning time, it still belongs to the
+// previous workday (01:10 Fri is Thursday evening work).
+export function workdayKey(date, cfg) {
+  const d = new Date(date);
+  if (minuteOfDay(d) < toMinutes(cfg.morning)) d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function countFile(date, cfg) {
+  const dir = path.join(stateDir(), "counts");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return path.join(dir, workdayKey(date, cfg));
+}
+
+export function recordPrompt(date, cfg) {
+  try {
+    fs.appendFileSync(countFile(date, cfg), date.toISOString() + "\n", { mode: 0o600 });
+  } catch {
+    // never fail a hook on a count-write
+  }
+}
+
+export function todaysCount(date, cfg) {
+  try {
+    const raw = fs.readFileSync(countFile(date, cfg), "utf8");
+    // Count non-empty lines. Each line is one prompt; truncation can only
+    // undercount, never overcount, which is the safe direction.
+    let n = 0;
+    for (let i = 0; i < raw.length; i++) if (raw.charCodeAt(i) === 10) n++;
+    return n;
+  } catch {
+    return 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
