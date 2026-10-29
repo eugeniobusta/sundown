@@ -6,16 +6,25 @@ For developers using Claude Code who keep working late. Every task is faster now
 
 Sundown doesn't help you do more. It helps you stop.
 
-## Install (2 commands, under 2 minutes)
+## Install
 
 **Requirements:** Claude Code, Node.js 18+ on your PATH (`node --version`). No `npm install` — zero dependencies.
+
+**Option A — load from a local clone (always works):**
+
+```bash
+git clone https://github.com/eugeniobusta/sundown
+claude --plugin-dir ./sundown
+```
+
+**Option B — Claude Code plugin marketplace:**
 
 ```
 /plugin marketplace add eugeniobusta/sundown
 /plugin install sundown@sundown
 ```
 
-Done. Sundown is live with zero-config defaults: **50 prompts/day**, shutdown at **22:30**, wake at **08:00**. Change anything with `/sundown:schedule` (below).
+Either way, Sundown is live immediately with zero-config defaults: **50 prompts/day**, shutdown at **22:30**, wake at **08:00**. Change anything with `/sundown:schedule` (below).
 
 ## 60-second walkthrough
 

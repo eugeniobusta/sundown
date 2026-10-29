@@ -23,8 +23,7 @@ import path from "node:path";
 
 // Defaults used when ~/.sundown/config.json doesn't exist or a value is invalid.
 export const DEFAULTS = Object.freeze({
-  cutoff: "",               // when your evening starts (24h, local time). "" = no evening cutoff
-                            // until you choose one in /sundown:setup (so installing never blocks you)
+  cutoff: "22:30",          // when your evening starts (24h, local time). "" = no cutoff
   morning: "08:00",         // when your day starts again
   dailyLimit: 50,           // max human prompts counted per workday (0 = unlimited)
   ntfyTopic: "",            // phone pushes are OFF until you set a topic

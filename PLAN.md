@@ -23,6 +23,8 @@ All gaps closed. 31 tests passing, zero dependencies, clean README.
 6. **README** — framed around compression burnout, who it's for, 2-command install, 60-second walkthrough, what counts as a prompt, how enforcement works, honest limits, how to run tests.
 
 ## Fixes applied post-brief-alignment
+- `lib.mjs`: default `cutoff` changed from `""` to `"22:30"` (matches brief spec; existing users unaffected since their config.json overrides the default)
 - `gate.mjs`: added `prompt_text` fallback (Claude Code hook field) alongside legacy `prompt`
 - `morning.mjs`: updated recovery hint from `"override:"` to `/sundown:override`
 - `bin/sundown statusline`: added `"limit"` branch (was silently falling through to cutoff display)
+- `README.md`: added `claude --plugin-dir ./sundown` as a guaranteed-working install path; updated install section to be accurate
