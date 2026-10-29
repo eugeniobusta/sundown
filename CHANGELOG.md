@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.6
+
+From a round of new-user testing: four agents tried the plugin as a stranger would (real Claude Code, the README, the GitHub page, every command). The first item was measured in real Claude Code before and after.
+
+### Fixed
+- **The shutdown handoff was often vague.** While shut down, Claude's first shell command usually had quotes, a `*`, `&&` or `;`. The hook refused it with a message that only said "write TOMORROW.md and stop", so about half the time Claude gave up and wrote "I couldn't inspect the project", and that text became the next morning's greeting. A refused shell command now gets a message that says what is allowed, with examples that work, and the shutdown skill says to retry with one plain command.
+- **`git diff`, `git show` and patch-style `git log` could run a program named in the repository's own git config** (`diff.external`, a textconv driver). They are now allowed only with `--no-ext-diff --no-textconv`. A plain `git status` can still run `core.fsmonitor` from the repo's config; that is documented, because `git status` is the most useful command for a handoff.
+- **`sundown status` left out your cutoff on a day off,** so `/sundown:status` said no cutoff was set. It now always shows it.
+- **`/sundown:wake` with no cutoff set** said "off until 23:59" and the skill mentioned a `TOMORROW.md` that might not exist. It now says what actually happens and mentions the handoff only if there is one.
+- **A session opened after `/sundown:wake` at 18:30 said "Good morning".** It says "Welcome back" after noon.
+- **`install-statusline` reported success on a settings file holding `[]` and crashed on `null`.** It now refuses anything that isn't a JSON object, and accepts an empty file.
+- **The report showed all zeros** if a log line had a space after `"type":`. It now accepts spaces.
+- **A wrong setting value gave no hint.** `config daysOff saturday` now says to use `sat,sun`; every setting explains its format.
+
+### Changed
+- README: an honest description of shutdown (it writes a three-line note; it doesn't commit or stash), a "What it looks like" section with the real messages and a sample report image, uninstall instructions, the git caveat, and a mention of `demo/setup-demo.sh`.
+- The plugin description no longer says it "calls your phone" (pushes are optional and off by default).
+
+### Tests
+- 70 tests (was 60).
+
 ## 1.1.5
 
 Found by a second independent code review; the first two were reproduced before they were fixed.

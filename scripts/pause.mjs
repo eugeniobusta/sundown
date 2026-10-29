@@ -117,6 +117,15 @@ try {
 
   // Handoff not written yet: record that the agent was asked to pause.
   logEvent("pause-requested", { tool });
+  // A refused shell command is the common case: Claude writes quotes, "*", "&&" or ";" and gives up.
+  // Say exactly what is allowed, with examples that work, so it retries with one plain command instead.
+  const shellHelp = tool === "Bash"
+    ? "That shell command was refused, but looking around is still allowed: use ONE plain read-only command at a time " +
+      "(ls, cat, head, tail -n 20, wc, grep, find with -name/-type, git status, git log, or git diff --no-ext-diff --no-textconv), " +
+      "optionally piped into head. No quotes, no * globs, no && or ;, no > or 2>/dev/null, no $(...). " +
+      "Examples that work: `ls -la`, `grep -rn -e TODO -e FIXME .`, `find . -type f -name main.py`, `git log --oneline -5`. " +
+      "Read opens files, not folders (use ls for a folder). If you still can't tell where things stand, write the handoff from what you do know and say what you couldn't check. "
+    : "";
   // Deny this tool call. The reason is shown to Claude, so it says exactly what to do next: write TOMORROW.md in three lines, then end the turn. Writing it is allowed (checked above), so the next tool call after that triggers the full stop.
   console.log(JSON.stringify({
     hookSpecificOutput: {
@@ -124,6 +133,7 @@ try {
       permissionDecision: "deny",
       permissionDecisionReason:
         `The user has shut down for the day (Sundown, until ${dayAndTime(lock.until)}). Don't continue the task. ` +
+        shellHelp +
         "Write a short handoff to TOMORROW.md in the project root with exactly three lines: " +
         "\"Stopped at: …\", \"First step tomorrow: …\", \"Open question: …\" " +
         "(be concrete: files, functions, what's half-done). Then stop and end your turn.",

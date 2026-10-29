@@ -71,7 +71,10 @@ try {
     // Record the wake in the local event log.
     logEvent("wake");
     // Tell Claude (and so you) when quiet hours start applying again.
-    console.log(`Sundown: switched OFF. Quiet hours are ignored until ${hhmm(until)}.`);
+    // With no cutoff set there is no "next cutoff": say it's off for the rest of today instead of naming 23:59.
+    console.log(cfg.cutoff
+      ? `Sundown: switched OFF. Quiet hours are ignored until ${hhmm(until)}.`
+      : "Sundown: switched OFF for the rest of today (no evening cutoff is set).");
     // Exit 0 means allow the prompt.
     process.exit(0);
   }

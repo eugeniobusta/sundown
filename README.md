@@ -11,7 +11,7 @@
 /plugin install sundown@sundown
 ```
 
-Restart Claude Code, then run `/sundown:setup` and choose your evening cutoff. From then on, "one more prompt" after your cutoff is held back; `/sundown:shutdown` ends the day, writes `TOMORROW.md` and stops your agents; the next morning your first session opens with that note. It needs Node.js 18 or newer and nothing else. Everything stays on your machine unless you turn on phone pushes.
+Restart Claude Code, then run `/sundown:setup` and choose your evening cutoff. From then on, "one more prompt" after your cutoff is held back; `/sundown:shutdown` ends the day, writes a three-line `TOMORROW.md` and stops your agents; the next morning your first session opens with that note. It needs Node.js 18 or newer and nothing else. Everything stays on your machine unless you turn on phone pushes.
 
 ## The problem: compression burnout
 
@@ -19,7 +19,7 @@ AI coding tools made each task faster, and the day got longer anyway. The time A
 
 **Who it's for:** developers who use Claude Code every day and keep finding themselves at the terminal at 22:00, "just finishing one thing."
 
-**What it is:** the *shutdown command* (one command that saves your open work, writes tomorrow's list and pauses your agents until morning), plus the rest of the evening built around it, and a report that shows whether the time went back to you.
+**What it is:** the *shutdown command*: one command that writes tomorrow's first step down and pauses your agents until morning. It saves *where you stopped*, as a three-line note; it doesn't commit or stash your code. Around it sits the rest of the evening, and a report that shows whether the time went back to you.
 
 ## What it does
 
@@ -37,6 +37,35 @@ It adds no work to your day: nothing to fill in, and nothing to check. It stays 
 
 Sundown doesn't help you do more. It helps you stop.
 
+## What it looks like
+
+These are the real messages, produced by the plugin's own scripts.
+
+**Half an hour before your cutoff** (once a day, and your message still goes through):
+```
+◐ Sundown: 20 min to your 21:00 cutoff. A good moment to land this task; /sundown:shutdown saves tomorrow's first step.
+```
+
+**After the cutoff**, a new message is held back:
+```
+☾ Sundown: it's after your 21:00 cutoff (until 08:00).
+Really need this now? Start the message with "override:". Working early? Run /sundown:wake.
+```
+
+**The next morning**, your first session opens with the handoff Claude wrote when you shut down:
+```
+☀ Good morning. Last time you stopped here:
+Stopped at: cart.py: total() ignores discount codes (TODO), tax() has a hardcoded 0.2 rate (FIXME)
+First step tomorrow: decide the format of discounts.json, then apply it in total()
+Open question: where should per-region tax rates come from?
+```
+
+**The status line** (optional) counts down in the corner of Claude Code: `☀ 9h 00m to sundown (21:00)`, then `◐ 15m to sundown · time to wrap up`, then `☾ After sundown · "override:" to send`.
+
+**`/sundown:report`** also writes a page you can open (it follows your light or dark setting). This one uses made-up data:
+
+![Sample Sundown report: evenings off, typical finish time, and a bar per day with the evening part in orange](docs/report-sample.png)
+
 ## Install
 
 ```
@@ -47,6 +76,15 @@ Sundown doesn't help you do more. It helps you stop.
 Restart Claude Code (or run `/reload-plugins`), then run `/sundown:setup`. Your first session after installing reminds you. Until you choose a cutoff, Sundown never blocks anything; only `/sundown:shutdown` does.
 
 Requirements: Claude Code with plugin support, and Node.js 18 or newer on your PATH (check with `node --version`; the native Claude Code installer does not include it). Nothing to `npm install`: Sundown has no dependencies.
+
+## Uninstall
+
+```
+/plugin uninstall sundown@sundown
+/plugin marketplace remove sundown
+```
+
+That removes the hooks and commands. Sundown's own files are small and stay until you delete them: the settings and history in `~/.sundown/`, and any `TOMORROW.md` notes it wrote in your projects. If you added the status line, `sundown install-statusline` saved your previous settings as `~/.claude/settings.json.sundown-backup`; restore it, or delete the `statusLine` entry from `~/.claude/settings.json`.
 
 ## Try it in a minute (no need to wait for the evening)
 
@@ -124,7 +162,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 - The **ntfy topic works like a password**: anyone who knows it can read and send your pushes. `sundown config ntfyTopic generate` makes a random 96-bit one. Don't share it or commit it.
 - `install-statusline` edits `~/.claude/settings.json`. It keeps a backup of your original (running it again doesn't overwrite that backup), keeps every other setting, and refuses to replace a status line that isn't Sundown's unless you pass `--force`.
 - The skills that run commands are limited to `Bash(sundown *)`.
-- During shutdown, the only shell commands allowed are on a short allowlist (`ls`, `cat`, `head`, `wc`, `pwd`, `grep`, `tail` with `-n`/`-c`/`-q`/`-v`, `find` with only its name, path, type, depth, newer, mtime, size and not/and/or tests, and `git status|log|diff|show|ls-files` without output or external-program flags), optionally piped into each other. Quotes, globs, `$`, `;`, `&`, `<`, `>` and every other program are denied, so there is no way to smuggle a second command in.
+- During shutdown, the only shell commands allowed are on a short allowlist (`ls`, `cat`, `head`, `wc`, `pwd`, `grep`, `tail` with `-n`/`-c`/`-q`/`-v`, `find` with only its name, path, type, depth, newer, mtime, size and not/and/or tests, and `git status|log|diff|show|ls-files` without output or external-program flags, where `git diff`, `git show` and patch-style `git log` also need `--no-ext-diff --no-textconv`), optionally piped into each other. Quotes, globs, `$`, `;`, `&`, `<`, `>` and every other program are denied, so there is no way to smuggle a second command in. One caveat: a plain `git status` still runs a program if the repository's own `.git/config` sets `core.fsmonitor`. That needs a config someone already put in your own repo, so Sundown treats your repositories as trusted. When a shell command is refused, Claude is told which forms are allowed (with examples), so it retries instead of writing a blind handoff.
 
 ## Limits (be honest about them)
 
@@ -141,10 +179,12 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 ## Development
 
 ```
-node --test test/*.test.mjs        # 60 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
+node --test test/*.test.mjs        # 70 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
 claude --plugin-dir .              # try the plugin without installing it
 claude plugin validate --strict .
 ```
+
+`demo/setup-demo.sh` prepares a throwaway demo project and state folder for showing Sundown live without touching your real settings.
 
 `SUNDOWN_DIR` moves the state folder and `SUNDOWN_NOW` fakes the current time (both used by the tests and handy for demos):
 

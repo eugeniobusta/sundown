@@ -89,7 +89,8 @@ try {
 
   // Greeting as JSON for Claude Code. systemMessage is shown to you; additionalContext is given to Claude. The note is labelled as notes, not instructions, so text inside it can't tell Claude what to do.
   console.log(JSON.stringify({
-    systemMessage: `☀ Good morning. Last time you stopped here:\n${text}`,
+    // "Good morning" only before noon; a session opened after /sundown:wake at 18:30 gets "Welcome back".
+    systemMessage: `☀ ${date.getHours() < 12 ? "Good morning" : "Welcome back"}. Last time you stopped here:\n${text}`,
     hookSpecificOutput: {
       hookEventName: "SessionStart",
       additionalContext:
