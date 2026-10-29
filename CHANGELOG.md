@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 (branch `improvements`)
+## 1.1.0
 
 ### Added
 - **Days off.** `sundown config daysOff sat,sun` keeps whole days quiet, from that morning to the next. A Friday evening says "until Mon 08:00". `/sundown:setup` asks about it.
@@ -18,5 +18,7 @@
 - **`sundown` didn't start on Node 18.** `bin/sundown` has no file extension, and `package.json` didn't say it's an ES module, so only Node 20+ guessed right. `package.json` now declares `"type": "module"`. CI covers Node 18, 20 and 22 so this can't come back.
 - **With a faked clock (`SUNDOWN_NOW`), the agent wasn't stopped after writing its handoff.** The lock now also records the real time.
 
+- **The status line ignored `wrapUpMinutes`** and always switched to "time to wrap up" at 30 minutes. It now uses your setting (and never does when it's off).
+
 ### Tests
-- 28 tests (was 18), covering every change above.
+- 29 tests (was 18), covering every change above.

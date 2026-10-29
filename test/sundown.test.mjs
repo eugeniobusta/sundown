@@ -451,3 +451,11 @@ test("report: compares with the week before and counts mornings that started fro
   assert.match(r.out, /Typical finish: 18:00 \(before: 23:15\)/);
   assert.match(r.out, /Mornings that started from TOMORROW\.md: 1/);
 });
+
+test("cli: the status line follows wrapUpMinutes instead of a fixed 30 minutes", () => {
+  const w = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 10 });
+  assert.match(cli(w, ["statusline"], "2026-10-29T20:35:00").out, /^☀ 25m to sundown/); // 25 min left, window is 10
+  assert.match(cli(w, ["statusline"], "2026-10-29T20:55:00").out, /time to wrap up/);
+  const off = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 0 });
+  assert.match(cli(off, ["statusline"], "2026-10-29T20:55:00").out, /^☀ 5m to sundown/);
+});

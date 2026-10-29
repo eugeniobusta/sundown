@@ -87,7 +87,7 @@ function statusline() {
   if (s.why === "dayoff") return console.log(`☾ Day off · back ${dayAndTime(s.until)}`);
   if (!cfg.cutoff) return console.log("☀ Sundown: no cutoff set");
   const left = nextCutoffAfter(date, cfg) - date;
-  if (left <= 30 * 60000) return console.log(`◐ ${duration(left)} to sundown · time to wrap up`);
+  if (cfg.wrapUpMinutes && left <= cfg.wrapUpMinutes * 60000) return console.log(`◐ ${duration(left)} to sundown · time to wrap up`);
   console.log(`☀ ${duration(left)} to sundown (${cfg.cutoff})`);
 }
 
