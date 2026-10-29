@@ -116,7 +116,8 @@ export async function collectPrompts(since, root = claudeProjectsDir()) {
       for await (const line of lines) {
         // Cheap text check first, so we only JSON-parse the few lines that can matter.
         // Skip lines that don't contain this exact text, so JSON.parse only runs on possible user messages.
-        if (!line.includes('"type":"user"')) continue;
+        // The pattern allows spaces around the colon, so a differently formatted log still counts.
+        if (!/"type"\s*:\s*"user"/.test(line)) continue;
         // The parsed line. Declared outside the try so it can be used after it.
         let entry;
         // Parse the line. A partial or corrupt line is skipped instead of aborting.

@@ -83,6 +83,19 @@ const VALID = {
 
 // True only for known keys. hasOwnProperty stops names like "constructor" or
 // "__proto__" from reaching VALID through the prototype chain.
+// What a valid value looks like, shown after "is not a valid value" so the fix is obvious.
+const SETTING_HINTS = {
+  cutoff: "Use a 24-hour time like 21:00, or off.",
+  morning: "Use a 24-hour time like 08:00.",
+  ntfyTopic: "Use letters, digits, _ and - (up to 64), or off. `generate` makes a safe one.",
+  ntfyServer: "Use an http:// or https:// address.",
+  pushDetail: "Use none or folder.",
+  minTurnSeconds: "Use a whole number of seconds, 0 to 86400.",
+  overrideMinutes: "Use a whole number of minutes, 1 to 240.",
+  daysOff: "Use three-letter day names separated by commas, like sat,sun (not all seven days), or off.",
+  wrapUpMinutes: "Use a whole number of minutes, 0 to 120, or off.",
+};
+
 export function isValidSetting(key, value) {
   // Known key only; run its validator on the value.
   return Object.prototype.hasOwnProperty.call(VALID, key) && VALID[key](value);
@@ -145,7 +158,7 @@ export function setConfig(key, value) {
   // Refuse names that aren't real settings, and list the real ones in the error.
   if (!(key in DEFAULTS)) throw new Error(`Unknown setting "${key}". Known: ${Object.keys(DEFAULTS).join(", ")}`);
   // Refuse values the validator rejects.
-  if (!isValidSetting(key, value)) throw new Error(`"${value}" is not a valid value for ${key}.`);
+  if (!isValidSetting(key, value)) throw new Error(`"${value}" is not a valid value for ${key}. ${SETTING_HINTS[key]}`);
   // The config file inside the state folder.
   const file = path.join(stateDir(), "config.json");
   // Start empty so a missing or broken file simply becomes a new one.
@@ -549,6 +562,14 @@ const GIT_SUBCOMMANDS = new Set(["status", "log", "diff", "show", "ls-files"]);
 // external program, or compare files outside the repository.
 const GIT_BAD_FLAG = /output|exec|ext-diff|textconv|open-files-in-pager|pager|no-index/;
 
+// Anything that makes git build a diff can run a program named in the repo's own git config
+// (diff.external, or a textconv driver). These two flags switch that off, so a diff is only
+// allowed when both are present. GIT_BAD_FLAG above refuses them anywhere else.
+const GIT_SAFE_DIFF_FLAGS = ["--no-ext-diff", "--no-textconv"];
+
+// Flags that make "git log" produce a diff (patch, stat, pickaxe...). "git diff" and "git show" always do.
+const GIT_DIFFY_FLAG = /^(-[puc]|-m|--patch|--cc|--stat|--numstat|--shortstat|--patch-with-stat|--word-diff|--color-words|--raw|--name-only|--name-status|-[SG].*)$/;
+
 // One command word + its arguments: is it safe?
 function segmentIsReadOnly(words) {
   // The program name, and everything after it.
@@ -570,8 +591,17 @@ function segmentIsReadOnly(words) {
       // Every word that starts with "-" must be on the list (so -exec and -delete never pass).
       return flags.every((f) => FIND_FLAGS.has(f));
     // git is allowed only for the read-only subcommands, with plain flags that don't write files or run programs.
-    case "git":
-      return GIT_SUBCOMMANDS.has(rest[0]) && flags.every((f) => PLAIN_FLAG.test(f) && !GIT_BAD_FLAG.test(f));
+    case "git": {
+      // Only the read-only subcommands.
+      if (!GIT_SUBCOMMANDS.has(rest[0])) return false;
+      // Every flag except the two safe-diff flags must be plain and not on the bad list.
+      const others = flags.filter((f) => !GIT_SAFE_DIFF_FLAGS.includes(f));
+      if (!others.every((f) => PLAIN_FLAG.test(f) && !GIT_BAD_FLAG.test(f))) return false;
+      // Does this command build a diff? "diff" and "show" always do; "log" only with a patch-like flag.
+      const buildsDiff = rest[0] === "diff" || rest[0] === "show" || (rest[0] === "log" && others.some((f) => GIT_DIFFY_FLAG.test(f)));
+      // If it does, both safe flags must be there.
+      return !buildsDiff || GIT_SAFE_DIFF_FLAGS.every((f) => flags.includes(f));
+    }
     // Any other program is refused.
     default:
       return false; // anything not named above (sort, uniq, rg, tree, sed, rm, node...) is refused

@@ -700,7 +700,7 @@ test("pause: while locked, only plain read-only shell commands are allowed (no q
   // Runs a Bash command through the pause hook and returns its stdout. Empty means allowed.
   const bash = (command) => hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command } }, "2026-10-29T18:01:00").out;
   // Plain read-only commands: listing, searching, git history and diffs, and a simple pipe into head.
-  for (const ok of ["ls -la", "grep -rn -e TODO -e FIXME .", "find . -name main.py", "git log --oneline -5", "git diff", "cat a.txt | head -20"]) {
+  for (const ok of ["ls -la", "grep -rn -e TODO -e FIXME .", "find . -name main.py", "git log --oneline -5", "git status", "git diff --no-ext-diff --no-textconv", "cat a.txt | head -20"]) {
     // Allowed means no output.
     assert.equal(bash(ok), "", `should allow: ${ok}`);
   }
@@ -710,7 +710,7 @@ test("pause: while locked, only plain read-only shell commands are allowed (no q
     "git commit -am x", "npm test", "sundown wake", "ls && npm test", "ls || npm test",
     "find . -ex''ec touch pwn {} +", "find . -d\"\"elete", "find . -{delete,}", "find . -fprint out", // quoting and brace tricks
     "sort -ofile in", "uniq in out", "rg --pre sh x .", "tree -o f", "tail -f log",                       // programs that can write or run things
-    "git diff --output=x", "git log --ext-diff", "ls *.py", "cat ~/secret", "ls |",
+    "git diff --output=x", "git log --ext-diff", "git diff", "git show HEAD", "git log -p", "ls *.py", "cat ~/secret", "ls |",
   ];
   // Each one must produce a deny decision.
   for (const command of bad) {
@@ -1280,4 +1280,114 @@ test("cli: `sundown config` shows wrapUpMinutes as off when it is 0", () => {
   const w = world();
   // The printed settings say "off", not 0.
   assert.match(cli(w, ["config"]).out, /"wrapUpMinutes": "off"/);
+});
+
+// ---------------------------------------------------------------------------
+// Handoff reliability, honest wording and tool robustness (1.1.7)
+// ---------------------------------------------------------------------------
+
+test("pause: a refused shell command says what IS allowed, so Claude retries instead of giving up", () => {
+  const w = world();
+  hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  const reason = (input) => JSON.parse(hook(w, "pause.mjs", input, "2026-10-29T18:01:00").out).hookSpecificOutput.permissionDecisionReason;
+  const bash = reason({ tool_name: "Bash", tool_input: { command: "ls; find . -name \"*.py\" | head" } });
+  assert.match(bash, /shell command was refused/);
+  assert.match(bash, /ONE plain read-only command/);
+  assert.match(bash, /grep -rn -e TODO -e FIXME \./); // an example that really works
+  assert.match(bash, /no \* globs/);
+  assert.match(bash, /TOMORROW\.md/); // still tells it to write the handoff
+  // Other refused tools get the plain message, without shell advice.
+  assert.doesNotMatch(reason({ tool_name: "WebFetch", tool_input: {} }), /shell command/);
+  // And every example the message gives is genuinely allowed by the check.
+});
+
+test("shell allowlist: every example in the refusal message is allowed", async () => {
+  const { isReadOnlyBash } = await import(script("lib.mjs"));
+  for (const ex of ["ls -la", "grep -rn -e TODO -e FIXME .", "find . -type f -name main.py", "git log --oneline -5", "git diff --no-ext-diff --no-textconv", "git status", "tail -n 20 x"]) {
+    assert.equal(isReadOnlyBash(ex), true, ex);
+  }
+});
+
+test("shell allowlist: git builds a diff only with both safe flags (repo config can name programs)", async () => {
+  const { isReadOnlyBash } = await import(script("lib.mjs"));
+  for (const bad of ["git diff", "git show HEAD", "git log -p", "git log --stat", "git log -Sfoo", "git diff --no-ext-diff", "git diff --no-textconv", "git diff --output=x --no-ext-diff --no-textconv", "git log --ext-diff"]) {
+    assert.equal(isReadOnlyBash(bad), false, bad);
+  }
+  for (const good of ["git status", "git log --oneline -5", "git ls-files", "git diff --no-ext-diff --no-textconv", "git show --no-ext-diff --no-textconv HEAD", "git log -p --no-ext-diff --no-textconv"]) {
+    assert.equal(isReadOnlyBash(good), true, good);
+  }
+});
+
+test("status: always shows the cutoff, including on a day off", () => {
+  const w = world({ cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" });
+  const out = cliAs("you", w, ["status"], "2026-10-31T14:00:00").out; // Saturday
+  assert.match(out, /day off/);
+  assert.match(out, /Cutoff: 21:00/);
+  assert.match(cliAs("you", world({}), ["status"]).out, /Cutoff: none/);
+});
+
+test("wake: with no cutoff set it says so instead of naming 23:59", () => {
+  const w = world({});
+  assert.match(cliAs("you", w, ["wake"], "2026-10-29T15:00:00").out, /haven't set a cutoff, so nothing changes/);
+  assert.doesNotMatch(cliAs("you", w, ["wake"], "2026-10-29T15:00:00").out, /23:59/);
+  const lock = hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  assert.match(lock.out, /ON until 08:00/);
+  const woke = hook(w, "gate.mjs", { prompt: "/sundown:wake" }, "2026-10-29T18:10:00");
+  assert.match(woke.out, /rest of today/);
+  assert.doesNotMatch(woke.out, /23:59/);
+});
+
+test("morning: after noon the greeting says 'Welcome back', not 'Good morning'", () => {
+  const w = world();
+  const handoff = path.join(w.project, "TOMORROW.md");
+  fs.writeFileSync(handoff, "Stopped at: x\nFirst step tomorrow: y\nOpen question: none\n");
+  const am = JSON.parse(hook(w, "morning.mjs", {}, "2026-10-29T10:00:00").out).systemMessage;
+  assert.match(am, /Good morning/);
+  const pm = JSON.parse(hook(w, "morning.mjs", {}, "2026-10-29T18:32:00").out).systemMessage;
+  assert.match(pm, /Welcome back/);
+  assert.doesNotMatch(pm, /Good morning/);
+});
+
+test("cli: install-statusline refuses a settings file that isn't a JSON object, and accepts an empty one", () => {
+  for (const content of ["[]", "null", "42", '"text"']) {
+    const w = world();
+    const settings = path.join(w.claude, "settings.json");
+    fs.writeFileSync(settings, content);
+    const r = cli(w, ["install-statusline"]);
+    assert.equal(r.code, 1, `${content} should be refused`);
+    assert.match(r.err, /JSON object/);
+    assert.equal(fs.readFileSync(settings, "utf8"), content); // untouched
+  }
+  const w = world();
+  const settings = path.join(w.claude, "settings.json");
+  fs.writeFileSync(settings, "");
+  assert.equal(cli(w, ["install-statusline"]).code, 0);
+  assert.match(JSON.parse(fs.readFileSync(settings, "utf8")).statusLine.command, /sundown/);
+});
+
+test("cli: a wrong setting value says what a right one looks like", () => {
+  const w = world();
+  assert.match(cli(w, ["config", "daysOff", "saturday"]).err, /three-letter day names.*sat,sun/);
+  assert.match(cli(w, ["config", "cutoff", "9pm"]).err, /24-hour time like 21:00/);
+  assert.match(cli(w, ["config", "overrideMinutes", "999"]).err, /1 to 240/);
+  assert.match(cli(w, ["config", "pushDetail", "all"]).err, /none or folder/);
+});
+
+test("report: a session log with spaces around the colon still counts", () => {
+  const w = world();
+  const proj = path.join(w.claude, "projects", "-Users-me-app");
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, "s.jsonl"),
+    '{"type": "user", "uuid": "1", "timestamp": "' + new Date("2026-10-28T22:30:00").toISOString() + '", "message": {"content": "x"}}\n');
+  const r = cli(w, ["report", "3"], "2026-10-29T15:00:00");
+  assert.match(r.out, /Prompts in the evening: 1 of 1/);
+});
+
+test("shutdown skill: tells Claude what to do when a command is refused", () => {
+  const skill = fs.readFileSync(path.join(ROOT, "skills", "shutdown", "SKILL.md"), "utf8");
+  assert.match(skill, /refused/);
+  assert.match(skill, /ONE plain command/);
+  assert.match(skill, /--no-ext-diff --no-textconv/);
+  const wake = fs.readFileSync(path.join(ROOT, "skills", "wake", "SKILL.md"), "utf8");
+  assert.match(wake, /only if you know the project has one/);
 });

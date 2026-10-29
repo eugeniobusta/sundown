@@ -75,7 +75,7 @@ function status() {
   // Off and no cutoff set yet: Sundown never blocks anything, so tell the user how to set one.
   else lines.push("☀ Sundown is off. No evening cutoff yet (run /sundown:setup). /sundown:shutdown still works.");
   // Second line always shows the main settings, with the phone topic masked.
-  lines.push(`Morning: ${cfg.morning} · Days off: ${cfg.daysOff || "none"} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
+  lines.push(`Cutoff: ${cfg.cutoff || "none"} · Morning: ${cfg.morning} · Days off: ${cfg.daysOff || "none"} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
   // Print both lines at once.
   console.log(lines.join("\n"));
 }
@@ -249,11 +249,21 @@ function installStatusline() {
   // Only read the file if it exists.
   if (fs.existsSync(file)) {
     // Parse the existing settings. If they aren't valid JSON, we must not overwrite them.
-    try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch {
+    try {
+      // An empty (or whitespace-only) file has nothing to lose, so treat it as empty settings.
+      const text = fs.readFileSync(file, "utf8");
+      settings = text.trim() === "" ? {} : JSON.parse(text);
+    } catch {
       // Tell the user and stop. Exit code 1 means failure.
       console.error(`Not touching ${file}: it isn't valid JSON. Fix it first.`);
       process.exit(1);
     }
+  }
+  // Settings must be a JSON object. "[]", "null", a number or a string would lose the new entry or crash, so refuse them.
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    // Tell the user and stop. Exit code 1 means failure.
+    console.error(`Not touching ${file}: it should hold a JSON object ({ ... }), but holds something else. Fix it first.`);
+    process.exit(1);
   }
   // The status line the user already has, if any.
   const current = settings.statusLine;
@@ -335,7 +345,9 @@ try {
       // Record it in the local event log.
       logEvent("wake");
       // Different message depending on whether there was anything to switch off.
-      console.log(wasOn
+      // With no cutoff set there is no "next cutoff", so don't name 23:59: say what actually happens.
+      if (!cfg.cutoff) console.log(wasOn ? "☀ Sundown is off for the rest of today." : "☀ Sundown wasn't on, and you haven't set a cutoff, so nothing changes.");
+      else console.log(wasOn
         ? `☀ Sundown is off until ${hhmm(until)}.`
         : `☀ Sundown wasn't on. It stays off until ${hhmm(until)} (your next cutoff).`);
       break;
