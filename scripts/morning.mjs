@@ -34,8 +34,8 @@ try {
   const state = sundownState(date, cfg);
   if (state.why) {
     const msg = state.why === "lock"
-      ? `☾ Sundown is on until ${hhmm(state.until)}. Start a message with "override:" if you really need to.`
-      : `☾ It's after your ${cfg.cutoff} cutoff. Start a message with "override:" if you really need to.`;
+      ? `☾ Sundown is on until ${hhmm(state.until)}. Use /sundown:override [15m] to send one message.`
+      : `☾ It's after your ${cfg.cutoff} cutoff. Use /sundown:override [15m] to send one message.`;
     console.log(JSON.stringify({ systemMessage: msg }));
     process.exit(0);
   }

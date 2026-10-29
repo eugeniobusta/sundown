@@ -67,7 +67,10 @@ try {
   const input = await readHookInput();
   const date = now();
   const cfg = readConfig();
-  const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
+  // Claude Code sends "prompt_text" in the hook JSON; "prompt" is the legacy field
+  // kept for backward compat and tests.
+  const prompt = (typeof input.prompt_text === "string" ? input.prompt_text
+    : typeof input.prompt === "string" ? input.prompt : "").trim();
 
   // 1. Turn start time (only the time, never the text).
   recordTurnStart(input.session_id, date);

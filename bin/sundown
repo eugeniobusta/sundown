@@ -84,7 +84,8 @@ function statusline() {
   // Claude Code sends session JSON on stdin; we don't need it, so we don't read it.
   const s = sundownState(date, cfg);
   if (s.why === "lock") return console.log(`☾ Shut down · back ${hhmm(s.until)}`);
-  if (s.why === "quiet") return console.log(`☾ After sundown · "override:" to send`);
+  if (s.why === "quiet") return console.log(`☾ After sundown · /sundown:override to send`);
+  if (s.why === "limit") return console.log(`☾ Daily limit hit · back at ${hhmm(s.until)}`);
   if (!cfg.cutoff) return console.log("☀ Sundown: no cutoff set");
   const left = nextCutoffAfter(date, cfg) - date;
   if (left <= 30 * 60000) return console.log(`◐ ${duration(left)} to sundown · time to wrap up`);

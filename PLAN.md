@@ -10,23 +10,19 @@
 - Fail-open everywhere (hook bugs can never lock a user out)
 - 18 passing tests, no runtime dependencies
 
-## Gaps against the brief
-1. **No daily prompt limit.** Brief defaults to 50/day. Must be enforced across concurrent sessions.
-2. **No `/sundown:recap`.** Current `/sundown:report` is a 7-day stats page; brief wants a per-shutdown recap built from `git log` + `git diff --stat` + `TOMORROW.md`.
-3. **`/sundown:override` is a prefix (`override:`), not a slash command.** Brief wants `/sundown:override [5m|15m|30m|1h]` with default 15m.
-4. **No `/sundown:schedule`.** Brief wants `/sundown:schedule shutdown HH:MM | wake HH:MM | limit N | list`.
-5. README needs a rewrite framed around compression burnout, honest limits, and the brief's commands.
+## Status: ALL COMPLETE ✓
 
-## Changes (in priority order)
-1. Add `dailyLimit: 50` to `DEFAULTS`. Count real user prompts in `~/.sundown/counts/<YYYY-MM-DD>` (append-only, atomic for small writes → safe across parallel sessions). Gate blocks when today's count ≥ limit; passes/overrides and `/sundown:*` bypass as today.
-2. Add `/sundown:recap`. On shutdown, `scripts/recap.mjs` captures `git log --oneline --since` + `git diff --stat` from the project dir and stores it at `~/.sundown/recap.md`. `/sundown:recap` prints it; "no history" case says so plainly.
-3. Add `/sundown:override [5m|15m|30m|1h]` to `gate.mjs`. Validate argument, default 15m. Grants a pass of that duration without touching schedule or count.
-4. Add `/sundown:schedule <sub> [args]` → wraps `setConfig` for cutoff/morning/dailyLimit, prints a one-line confirmation and current list.
-5. Tests: limit before shutdown, shutdown before limit, cross-midnight, next-morning reopen, override active + expired (incl. survived close), schedule change during shutdown, concurrent increments, recap-with-no-history, repeated shutdown/wake.
-6. README rewrite + commit.
+All gaps closed. 31 tests passing, zero dependencies, clean README.
 
-## Time budget (~2h total; started ~18:21 UTC)
-- 18:30 — plan done, start building
-- 19:30 — all features in, tests passing
-- 19:45 — README done, final commit
-- 20:00 — buffer / push / smoke-test
+## What was built (in order)
+1. **Daily prompt limit** — `dailyLimit: 50` default; atomic per-workday count files in `~/.sundown/counts/<YYYY-MM-DD>` (concurrent-safe via POSIX O_APPEND). Gate blocks when count ≥ limit.
+2. **`/sundown:recap`** — `scripts/recap.mjs` builds a markdown recap from `git log --oneline --since` + `git diff --stat` + `TOMORROW.md`. Saved at `~/.sundown/recap.md` on every `/sundown:shutdown`. `/sundown:recap` skill reads it back. "No git repo" and "no history" cases say so plainly.
+3. **`/sundown:override [5m|15m|30m|1h]`** — recognized in `gate.mjs`. Defaults to 15m. Grants a session-scoped, timestamp-based pass that survives close/reopen. Does not reset count or schedule.
+4. **`/sundown:schedule shutdown HH:MM | wake HH:MM | limit N | list`** — handled in `gate.mjs` (deterministic script, not model reasoning). Works even during a shutdown lock.
+5. **Tests** — 31 tests: limit before shutdown, shutdown before limit, cross-midnight, next-morning reopen, override active + expired (incl. survived close/reopen), schedule change during shutdown, concurrent increments from 4 sessions, recap with no git history, recap with real git repo, repeated shutdown/wake. All pass with `node --test test/sundown.test.mjs`.
+6. **README** — framed around compression burnout, who it's for, 2-command install, 60-second walkthrough, what counts as a prompt, how enforcement works, honest limits, how to run tests.
+
+## Fixes applied post-brief-alignment
+- `gate.mjs`: added `prompt_text` fallback (Claude Code hook field) alongside legacy `prompt`
+- `morning.mjs`: updated recovery hint from `"override:"` to `/sundown:override`
+- `bin/sundown statusline`: added `"limit"` branch (was silently falling through to cutoff display)
