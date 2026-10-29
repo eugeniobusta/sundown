@@ -72,10 +72,12 @@ export async function collectPrompts(since, root = claudeProjectsDir()) {
     for (const file of files) {
       const full = path.join(dir, file);
       try {
-        if (fs.statSync(full).mtime < since) continue; // untouched since then: skip the whole file
+        const st = fs.statSync(full);
+        if (!st.isFile() || st.mtime < since) continue; // a folder named x.jsonl, or untouched since then: skip
       } catch { continue; }
 
       const lines = readline.createInterface({ input: fs.createReadStream(full, "utf8"), crlfDelay: Infinity });
+      try {
       for await (const line of lines) {
         // Cheap text check first, so we only JSON-parse the few lines that can matter.
         if (!line.includes('"type":"user"')) continue;
@@ -89,6 +91,7 @@ export async function collectPrompts(since, root = claudeProjectsDir()) {
         seen.add(key);
         times.push(t); // ONLY the time is kept
       }
+      } catch { /* unreadable or deleted mid-read: skip this file, keep the rest of the report */ }
     }
   }
   return times;
@@ -102,7 +105,7 @@ export function summarise({ prompts, events, date, cfg, days }) {
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(date);
     d.setDate(d.getDate() - i);
-    d.setHours(12, 0, 0, 0);
+    d.setHours(23, 59, 0, 0); // late in the day, so the key is this calendar day even if morning is after noon
     const key = workday(d, cfg);
     const row = {
       key, label: `${DAY[d.getDay()]} ${d.getDate()} ${MONTH[d.getMonth()]}`,

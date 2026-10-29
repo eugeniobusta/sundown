@@ -91,7 +91,7 @@ Sundown is five small Node scripts attached to Claude Code hooks:
 | Hook | Script | Job |
 |---|---|---|
 | `UserPromptSubmit` | `scripts/gate.mjs` | Holds back prompts after the cutoff, on a day off or during shutdown; handles `override:`, `/sundown:shutdown` and `/sundown:wake`; shows the once-a-day wrap-up note. |
-| `PreToolUse` | `scripts/pause.mjs` | During shutdown only: denies every tool call except reading files (including plain read-only shell commands like `ls`, `grep`, `git log`; nothing that chains, redirects or writes) and writing the project's `TOMORROW.md`, then stops the agent once the handoff exists. |
+| `PreToolUse` | `scripts/pause.mjs` | During shutdown only: denies every tool call except reading files (including a short allowlist of plain read-only shell commands: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find` and `git status|log|diff|show`, with no quotes, globs, `;`, `&&` or `>`) and writing the project's `TOMORROW.md`, then stops the agent once the handoff exists. |
 | `SessionStart` | `scripts/morning.mjs` | Shows yesterday's `TOMORROW.md` to you and to Claude; clears the lock when morning comes; points a fresh install at `/sundown:setup` once. |
 | `Notification`, `Stop` | `scripts/push.mjs` | Phone pushes, only if you set a topic. |
 
@@ -115,7 +115,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 - The **ntfy topic works like a password**: anyone who knows it can read and send your pushes. `sundown config ntfyTopic generate` makes a random 96-bit one. Don't share it or commit it.
 - `install-statusline` edits `~/.claude/settings.json`. It keeps a backup of your original (running it again doesn't overwrite that backup), keeps every other setting, and refuses to replace a status line that isn't Sundown's unless you pass `--force`.
 - The skills that run commands are limited to `Bash(sundown *)`.
-- During shutdown, the only shell commands allowed are single read-only ones (`ls`, `cat`, `grep`, `find`, `git log`...), optionally piped into each other. Anything with `;`, `&&`, `>`, `$(...)`, `find -exec/-delete` or a write is denied.
+- During shutdown, the only shell commands allowed are on a short allowlist (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find` with name/type/depth flags, `git status|log|diff|show|ls-files`), optionally piped into each other. Quotes, globs, `$`, `;`, `&`, `<`, `>` and every other program are denied, so there is no way to smuggle a second command in.
 
 ## Limits (be honest about them)
 
@@ -132,7 +132,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 ## Development
 
 ```
-node --test test/*.test.mjs        # 43 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
+node --test test/*.test.mjs        # 49 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
 claude --plugin-dir .              # try the plugin without installing it
 claude plugin validate --strict .
 ```

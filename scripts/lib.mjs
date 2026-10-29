@@ -352,22 +352,57 @@ export function hasPass(sessionId, date) {
 // Read-only shell commands (allowed while shut down, so Claude can write the handoff)
 // ---------------------------------------------------------------------------
 
-// Commands that only look. No shell features that could chain, redirect or run
-// something else are allowed: a command is one or more of these joined by "|" and
-// nothing more.
-const READ_ONLY_CMDS = new Set(["ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "tree", "pwd", "stat", "file", "sort", "uniq"]);
-const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "ls-files"]);
-// Flags that turn an otherwise read-only command into one that writes or runs things.
-const DANGEROUS_FLAG = /^(-exec|-execdir|-ok|-okdir|-delete|-fprint\w*|-fls|--output(=.*)?|-o)$/;
+// Shell commands Claude may run while you are shut down, so it can look at the project
+// and write an accurate handoff. This is an ALLOWLIST: a command passes only if every
+// part of it is known to be safe. (An earlier denylist of "bad flags" was bypassed with
+// quoting tricks like find -ex''ec.)
+//
+// Rule 1: no shell features at all. Quotes, globs, braces, $, backticks, ~, ;, &, <, >,
+//         ( ) and newlines are refused, so what you read is exactly what the shell runs.
+//         The only operator allowed is "|", to pipe one allowed command into another.
+// Rule 2: the program must be on the list below, and every flag must be on its list.
+const SHELL_FEATURES = /[;&<>`\\$(){}\[\]*?~!'"\n\r\t]/;
+
+// Flags that are fine for most listing and reading commands: short flags such as -la or
+// -rn, and plain long flags such as --oneline. (Quotes are refused above, so a flag can
+// never hide a second word.)
+const PLAIN_FLAG = /^(-[A-Za-z0-9]+|--[a-z][a-z-]*(=[A-Za-z0-9_.,\/-]+)?)$/;
+
+// find is the dangerous one (-exec, -delete, -fprint...), so it gets an exact flag list.
+const FIND_FLAGS = new Set(["-name", "-iname", "-path", "-ipath", "-type", "-maxdepth", "-mindepth", "-newer", "-mtime", "-size", "-not", "-o", "-a"]);
+
+// git subcommands that only read. Flags that can write a file or run a program are refused.
+const GIT_SUBCOMMANDS = new Set(["status", "log", "diff", "show", "ls-files"]);
+const GIT_BAD_FLAG = /output|exec|ext-diff|textconv|open-files-in-pager|pager|no-index/;
+
+// One command word + its arguments: is it safe?
+function segmentIsReadOnly(words) {
+  const [cmd, ...rest] = words;
+  const flags = rest.filter((w) => w.startsWith("-"));
+  switch (cmd) {
+    case "ls": case "cat": case "head": case "wc": case "pwd": case "grep":
+      return flags.every((f) => PLAIN_FLAG.test(f));
+    case "tail":
+      return flags.every((f) => PLAIN_FLAG.test(f) && !/^-[A-Za-z0-9]*[fF]/.test(f) && !/^--follow/.test(f)); // -f never ends
+    case "find":
+      // Every word that starts with "-" must be on the list (so -exec and -delete never pass).
+      return flags.every((f) => FIND_FLAGS.has(f));
+    case "git":
+      return GIT_SUBCOMMANDS.has(rest[0]) && flags.every((f) => PLAIN_FLAG.test(f) && !GIT_BAD_FLAG.test(f));
+    default:
+      return false; // anything not named above (sort, uniq, rg, tree, sed, rm, node...) is refused
+  }
+}
 
 export function isReadOnlyBash(command) {
+  // Empty, not text, or suspiciously long: refuse.
   if (typeof command !== "string" || !command.trim() || command.length > 500) return false;
-  if (/[;&<>`\n\r\\]|\$\(|\$\{/.test(command)) return false; // chaining, redirects, substitution, escapes
-  return command.split("|").every((segment) => {
-    const words = segment.trim().split(/\s+/);
-    const [cmd, sub] = words;
-    if (cmd === "git") return READ_ONLY_GIT.has(sub) && !words.some((w) => DANGEROUS_FLAG.test(w));
-    return READ_ONLY_CMDS.has(cmd) && !words.some((w) => DANGEROUS_FLAG.test(w));
+  // Rule 1: refuse every shell feature except the pipe.
+  if (SHELL_FEATURES.test(command)) return false;
+  // Rule 2: every piped part must be a safe command. "||" leaves an empty part, which fails.
+  return command.split("|").every((part) => {
+    const words = part.trim().split(/\s+/);
+    return words[0] !== "" && segmentIsReadOnly(words);
   });
 }
 

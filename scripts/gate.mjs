@@ -44,21 +44,23 @@ try {
 
   // 2. State-changing commands. Plain stdout from this hook is added to Claude's
   //    context, which is how the skill learns the exact times.
-  if (/^\/sundown:shutdown\b/i.test(prompt)) {
+  if (/^\/sundown:shutdown(\s|$)/i.test(prompt)) {
     const lock = lockOn(date, cfg);
     logEvent("shutdown");
     console.log(`Sundown: the shutdown lock is now ON until ${dayAndTime(new Date(lock.until))}.`);
     process.exit(0);
   }
-  if (/^\/sundown:wake\b/i.test(prompt)) {
+  if (/^\/sundown:wake(\s|$)/i.test(prompt)) {
     const until = wake(date, cfg);
     logEvent("wake");
     console.log(`Sundown: switched OFF. Quiet hours are ignored until ${hhmm(until)}.`);
     process.exit(0);
   }
 
-  // 3. Other Sundown commands always work, so you can check status or run setup at night.
-  if (/^\/sundown:/i.test(prompt)) process.exit(0);
+  // 3. The read-only Sundown commands always work, so you can check status or run setup at
+  //    night. Only the bare command (report may take a number of days): text after it
+  //    would reach Claude as a task, so "/sundown:status now write a feature" is held back.
+  if (/^\/sundown:(status|setup|report(\s+\d{1,2})?)\s*$/i.test(prompt)) process.exit(0);
 
   // 4. The wrap-up note. "systemMessage" is shown to you; "additionalContext" tells
   //    Claude, so it can suggest a clean stopping point rather than start something big.

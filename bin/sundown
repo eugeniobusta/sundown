@@ -73,8 +73,13 @@ function config() {
   }
   // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
   // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
-  if (process.env.CLAUDECODE && LOOSENING.has(key) && sundownState(date, cfg).why) {
+  if ("CLAUDECODE" in process.env && LOOSENING.has(key) && sundownState(date, cfg).why) {
     throw new Error(`Sundown is on, so only you can change ${key}. Run this in your own terminal, or wait until it's off.`);
+  }
+  // Pointing pushes at another server would send them (maybe with your folder name) there,
+  // so only you may do that, at any time of day.
+  if ("CLAUDECODE" in process.env && key === "ntfyServer") {
+    throw new Error("Only you can change ntfyServer. Run this in your own terminal.");
   }
   let value = raw;
   if (raw === "off" && (key === "cutoff" || key === "ntfyTopic" || key === "daysOff")) value = "";
@@ -153,7 +158,7 @@ async function testPush() {
 // Shutting down and waking up change what Claude is allowed to do, so only a person
 // may do it. Claude Code sets CLAUDECODE=1 in the shell it gives Claude; refuse there.
 // (The slash commands don't come through here: the prompt hook handles them.)
-if ((command === "wake" || command === "shutdown") && process.env.CLAUDECODE) {
+if ((command === "wake" || command === "shutdown") && "CLAUDECODE" in process.env) {
   console.error(`sundown: only you can ${command} Sundown. Type /sundown:${command} in Claude Code, or run this in your own terminal.`);
   process.exit(1);
 }

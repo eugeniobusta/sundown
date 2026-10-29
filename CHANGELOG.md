@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.3
+
+Found by an independent code review; each one was reproduced before it was fixed.
+
+### Fixed
+- **While shut down, Claude could run commands it shouldn't.** The read-only shell check was a list of bad flags, and quoting tricks beat it (`find . -ex''ec ...` ran a command, `sort -ofile` and `uniq in out` wrote files). It is now an allowlist: only `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find` (name/type/depth flags only) and `git status|log|diff|show|ls-files`, with no quotes, globs, `$`, `;`, `&`, `>` and the like. The only operator is `|`.
+- **`/sundown:status now write me a feature` skipped the gate.** Only the bare `/sundown:status`, `/sundown:setup` and `/sundown:report [days]` skip it now; anything typed after them is held back like any other prompt.
+- **A symlinked `TOMORROW.md` was read into the session** (a repo could point it at a private file). Symlinks are ignored. The handoff text is also labelled as notes, not instructions.
+- **`CLAUDECODE=` (empty) got around the "only you can wake/shutdown" check.** The variable existing is enough now. Claude also can't change `ntfyServer`.
+- **`sundown report` crashed** on a folder or unreadable file named `*.jsonl`. It skips it.
+- **The report dropped today's prompts when `morning` was after 12:00.**
+- **The shutdown skill suggested a command the hook refused** (`grep -rnE 'TODO|FIXME'`). It now suggests `grep -rn -e TODO -e FIXME .`.
+
+### Tests
+- 49 tests (was 43).
+
 ## 1.1.2
 
 Fixes for problems found by six test agents that exercised every feature, including a run in real Claude Code.

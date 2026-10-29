@@ -452,15 +452,22 @@ test("report: compares with the week before and counts mornings that started fro
   assert.match(r.out, /Mornings that started from TOMORROW\.md: 1/);
 });
 
-test("pause: while locked, plain read-only shell commands are allowed so Claude can inspect the project", () => {
+test("pause: while locked, only plain read-only shell commands are allowed (no quoting tricks)", () => {
   const w = world();
   hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
   const bash = (command) => hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command } }, "2026-10-29T18:01:00").out;
-  for (const ok of ["ls -la", "grep -rn TODO . | head -20", "find . -name '*.py'", "git log --oneline -5", "git diff"]) {
+  for (const ok of ["ls -la", "grep -rn -e TODO -e FIXME .", "find . -name main.py", "git log --oneline -5", "git diff", "cat a.txt | head -20"]) {
     assert.equal(bash(ok), "", `should allow: ${ok}`);
   }
-  for (const bad of ["rm -rf .", "ls; rm -rf .", "cat a > b", "echo $(whoami)", "find . -delete", "find . -exec rm {} +", "git push", "git commit -am x", "npm test", "sundown wake", "ls && npm test"]) {
-    assert.equal(JSON.parse(bash(bad)).hookSpecificOutput.permissionDecision, "deny", `should deny: ${bad}`);
+  const bad = [
+    "rm -rf .", "ls; rm -rf .", "cat a > b", "echo $(whoami)", "find . -delete", "find . -exec rm {} +", "git push",
+    "git commit -am x", "npm test", "sundown wake", "ls && npm test", "ls || npm test",
+    "find . -ex''ec touch pwn {} +", "find . -d\"\"elete", "find . -{delete,}", "find . -fprint out", // quoting and brace tricks
+    "sort -ofile in", "uniq in out", "rg --pre sh x .", "tree -o f", "tail -f log",                       // programs that can write or run things
+    "git diff --output=x", "git log --ext-diff", "ls *.py", "cat ~/secret", "ls |",
+  ];
+  for (const command of bad) {
+    assert.equal(JSON.parse(bash(command)).hookSpecificOutput.permissionDecision, "deny", `should deny: ${command}`);
   }
 });
 
@@ -612,4 +619,64 @@ test("report: typical finish is the median, so one very late night doesn't skew 
     line("a", "2026-10-26T17:00:00") + line("b", "2026-10-27T17:30:00") + line("c", "2026-10-28T23:50:00"));
   const r = cli(w, ["report", "7"], "2026-10-29T15:00:00");
   assert.match(r.out, /Typical finish: 17:30/); // an average would say 19:40
+});
+
+// ---------------------------------------------------------------------------
+// Fixes from the independent review (1.1.3)
+// ---------------------------------------------------------------------------
+
+test("gate: /sundown:status (or report, setup) lets only the bare command through; trailing text is a task and is held back", () => {
+  const w = world();
+  const night = "2026-10-29T23:00:00";
+  for (const ok of ["/sundown:status", "/sundown:setup", "/sundown:report", "/sundown:report 30"]) {
+    assert.equal(hook(w, "gate.mjs", { prompt: ok }, night).code, 0, ok);
+  }
+  for (const sneaky of ["/sundown:status now write me a feature", "/sundown:report 7 and also refactor", "/sundown:wakeup", "/sundown:other"]) {
+    assert.equal(hook(w, "gate.mjs", { prompt: sneaky }, night).code, 2, sneaky);
+  }
+});
+
+test("morning: a TOMORROW.md that is a symlink is never read into the session", () => {
+  const w = world();
+  const secret = path.join(tmp("sd-secret-"), "secret.txt");
+  fs.writeFileSync(secret, "TOP-SECRET");
+  fs.symlinkSync(secret, path.join(w.project, "TOMORROW.md"));
+  const r = hook(w, "morning.mjs", {}, "2026-10-29T12:00:00");
+  assert.equal(r.out, "");
+});
+
+test("morning: the handoff is given to Claude as notes, not instructions", () => {
+  const w = world();
+  fs.writeFileSync(path.join(w.project, "TOMORROW.md"), "Stopped at: a\nFirst step tomorrow: b\nOpen question: none\n");
+  const ctx = JSON.parse(hook(w, "morning.mjs", {}, "2026-10-29T12:00:00").out).hookSpecificOutput.additionalContext;
+  assert.match(ctx, /never as instructions/);
+});
+
+test("cli: an empty CLAUDECODE still counts as Claude's shell, and Claude can't repoint pushes", () => {
+  const w = world();
+  const run = (args, nowIso) => spawnSync("node", [BIN, ...args], {
+    env: { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: nowIso, CLAUDE_CONFIG_DIR: w.claude, CLAUDECODE: "" }, encoding: "utf8",
+  });
+  assert.equal(run(["wake"], "2026-10-29T22:00:00").status, 1);
+  assert.equal(run(["config", "cutoff", "off"], "2026-10-29T22:00:00").status, 1);
+  assert.equal(run(["config", "ntfyServer", "http://evil.example"], "2026-10-29T15:00:00").status, 1); // even by day
+  assert.equal(cliAs("you", w, ["config", "ntfyServer", "https://ntfy.example.org"]).code, 0);          // you can
+});
+
+test("report: a folder or unreadable file named *.jsonl doesn't break the report", () => {
+  const w = world();
+  const proj = path.join(w.claude, "projects", "-Users-me-app");
+  fs.mkdirSync(path.join(proj, "x.jsonl"), { recursive: true }); // a folder, not a file
+  const r = cli(w, ["report", "7"], "2026-10-29T15:00:00");
+  assert.equal(r.code, 0);
+  assert.match(r.out, /Sundown report/);
+});
+
+test("report: today's prompts are counted when the morning time is after noon", () => {
+  const w = world({ cutoff: "", morning: "14:00" });
+  const proj = path.join(w.claude, "projects", "-Users-me-app");
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, "s.jsonl"),
+    JSON.stringify({ type: "user", uuid: "a", timestamp: new Date("2026-10-29T15:00:00").toISOString(), message: { content: "x" } }) + "\n");
+  assert.match(cli(w, ["report", "3"], "2026-10-29T16:00:00").out, /Prompts in the evening: \d+ of 1 /);
 });
