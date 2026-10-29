@@ -159,7 +159,7 @@ test("pause: while locked, denies work, allows reading and the handoff, then sto
   fs.writeFileSync(handoff, "Stopped at: x\nFirst step tomorrow: y\nOpen question: none\n");
   const t = new Date("2026-10-29T18:02:00");
   fs.utimesSync(handoff, t, t);
-  const stop = JSON.parse(hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command: "ls" } }, "2026-10-29T18:03:00").out);
+  const stop = JSON.parse(hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command: "npm test" } }, "2026-10-29T18:03:00").out);
   assert.equal(stop.continue, false);
   assert.match(stop.stopReason, /paused until 08:00/);
 });
@@ -170,7 +170,7 @@ test("pause: an override pass lets that session work; the lock ends in the morni
   hook(w, "gate.mjs", { prompt: "override: hotfix" }, "2026-10-29T18:10:00");
   assert.equal(hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command: "ls" } }, "2026-10-29T18:15:00").out, "");
   // Pass expires after 20 minutes.
-  assert.notEqual(hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command: "ls" } }, "2026-10-29T18:45:00").out, "");
+  assert.notEqual(hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command: "npm test" } }, "2026-10-29T18:45:00").out, "");
   // Next morning: allowed again.
   assert.equal(hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command: "ls" } }, "2026-10-30T08:01:00").out, "");
 });
@@ -458,4 +458,16 @@ test("cli: the status line follows wrapUpMinutes instead of a fixed 30 minutes",
   assert.match(cli(w, ["statusline"], "2026-10-29T20:55:00").out, /time to wrap up/);
   const off = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 0 });
   assert.match(cli(off, ["statusline"], "2026-10-29T20:55:00").out, /^☀ 5m to sundown/);
+});
+
+test("pause: while locked, plain read-only shell commands are allowed so Claude can inspect the project", () => {
+  const w = world();
+  hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  const bash = (command) => hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command } }, "2026-10-29T18:01:00").out;
+  for (const ok of ["ls -la", "grep -rn TODO . | head -20", "find . -name '*.py'", "git log --oneline -5", "git diff"]) {
+    assert.equal(bash(ok), "", `should allow: ${ok}`);
+  }
+  for (const bad of ["rm -rf .", "ls; rm -rf .", "cat a > b", "echo $(whoami)", "find . -delete", "find . -exec rm {} +", "git push", "git commit -am x", "npm test", "sundown wake", "ls && npm test"]) {
+    assert.equal(JSON.parse(bash(bad)).hookSpecificOutput.permissionDecision, "deny", `should deny: ${bad}`);
+  }
 });

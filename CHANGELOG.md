@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+- **The status line ignored `wrapUpMinutes`** and always switched to "time to wrap up" at 30 minutes. It now uses your setting (and never does when it's off).
+
+- **The shutdown handoff was blank on current Claude Code.** Newer versions have no Glob/Grep tool and search files through Bash, which Sundown blocked during shutdown, so Claude couldn't see the project and wrote "nothing in progress". Plain read-only commands (`ls`, `grep`, `find`, `git log`...) are now allowed; anything that chains, redirects, deletes or writes is still blocked.
+- 30 tests.
+
 ## 1.1.0
 
 ### Added
@@ -18,7 +26,5 @@
 - **`sundown` didn't start on Node 18.** `bin/sundown` has no file extension, and `package.json` didn't say it's an ES module, so only Node 20+ guessed right. `package.json` now declares `"type": "module"`. CI covers Node 18, 20 and 22 so this can't come back.
 - **With a faked clock (`SUNDOWN_NOW`), the agent wasn't stopped after writing its handoff.** The lock now also records the real time.
 
-- **The status line ignored `wrapUpMinutes`** and always switched to "time to wrap up" at 30 minutes. It now uses your setting (and never does when it's off).
-
 ### Tests
-- 29 tests (was 18), covering every change above.
+- 28 tests (was 18), covering every change above.

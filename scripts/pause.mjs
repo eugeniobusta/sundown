@@ -6,8 +6,10 @@
 //
 // While locked:
 //   1. A session with an override pass works normally.
-//   2. Read-only tools (Read, Glob, Grep, LS) are allowed, so Claude can look at
-//      what it was doing and write an accurate handoff.
+//   2. Read-only tools (Read, Glob, Grep, LS) are allowed, and so are plain read-only
+//      shell commands (ls, grep, find, git log...: see isReadOnlyBash), because newer
+//      Claude Code versions search files through Bash. Claude needs to look at what it
+//      was doing to write an accurate handoff.
 //   3. Writing or editing THIS project's TOMORROW.md is allowed: that's the handoff.
 //      (Only the one in the project root, not any file that happens to share the name.)
 //   4. Once TOMORROW.md has been written since the lock was set, the next tool
@@ -19,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  readHookInput, now, lockState, hasPass, projectDir, logEvent, hhmm,
+  readHookInput, now, lockState, hasPass, projectDir, logEvent, hhmm, isReadOnlyBash,
 } from "./lib.mjs";
 
 // Tools that only look at files. Allowed during the lock so Claude can write an
@@ -44,6 +46,7 @@ try {
   const tool = String(input.tool_name || "");
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
   if (READ_ONLY.has(tool)) process.exit(0);
+  if (tool === "Bash" && isReadOnlyBash(toolInput.command)) process.exit(0);
 
   const handoff = path.join(projectDir(input), "TOMORROW.md");
   const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";

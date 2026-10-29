@@ -336,6 +336,29 @@ export function hasPass(sessionId, date) {
 }
 
 // ---------------------------------------------------------------------------
+// Read-only shell commands (allowed while shut down, so Claude can write the handoff)
+// ---------------------------------------------------------------------------
+
+// Commands that only look. No shell features that could chain, redirect or run
+// something else are allowed: a command is one or more of these joined by "|" and
+// nothing more.
+const READ_ONLY_CMDS = new Set(["ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "tree", "pwd", "stat", "file", "sort", "uniq"]);
+const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "ls-files"]);
+// Flags that turn an otherwise read-only command into one that writes or runs things.
+const DANGEROUS_FLAG = /^(-exec|-execdir|-ok|-okdir|-delete|-fprint\w*|-fls|--output(=.*)?|-o)$/;
+
+export function isReadOnlyBash(command) {
+  if (typeof command !== "string" || !command.trim() || command.length > 500) return false;
+  if (/[;&<>`\n\r\\]|\$\(|\$\{/.test(command)) return false; // chaining, redirects, substitution, escapes
+  return command.split("|").every((segment) => {
+    const words = segment.trim().split(/\s+/);
+    const [cmd, sub] = words;
+    if (cmd === "git") return READ_ONLY_GIT.has(sub) && !words.some((w) => DANGEROUS_FLAG.test(w));
+    return READ_ONLY_CMDS.has(cmd) && !words.some((w) => DANGEROUS_FLAG.test(w));
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Event log (never contains prompt text, file contents or code)
 // ---------------------------------------------------------------------------
 
