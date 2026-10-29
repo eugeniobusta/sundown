@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.5
+
+Found by a second independent code review; the first two were reproduced before they were fixed.
+
+### Fixed
+- **While Sundown was on, Claude could switch off tomorrow's evening.** The guard only compared when tonight ends, so with a lock or day off running, `config cutoff off`, `daysOff off` or `morning 00:00` were accepted. It now also refuses anything that makes the regular schedule looser: a later or removed cutoff, an earlier morning, fewer days off. Tightening still works, so setup can finish.
+- **Setup at night left the user's own answers blocked by the gate** when Sundown was already on. The setup skill now says to start each answer with `override:`.
+- **The agent was not stopped by reads after the handoff.** `pause.mjs` now stops the run on the next tool call of any kind once `TOMORROW.md` exists (before, a read-only call slipped through).
+- **`tail --fol` and other shortened spellings of `--follow` got past the shell check.** `tail` now takes only `-n`, `-c`, `-q`, `-v` and a plain count.
+- **"Mon 08:00" labels** were added whenever the time was more than 24 hours away, so "tomorrow 08:00" could get a weekday on a daylight-saving day. It now counts calendar days.
+- **README and comments corrected:** script count, event-log contents, the allowlist, the handoff folder, per-call cost; the comments on `sundownState` and the guard.
+
+### Added
+- A 30-second quickstart at the top of the README.
+
+### Tests
+- 60 tests (was 55).
+
 ## 1.1.4
 
 Found by a medium-effort bug scan of every branch; the first was reproduced before it was fixed.

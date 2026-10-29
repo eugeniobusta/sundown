@@ -1113,3 +1113,84 @@ test("shutdown shell allowlist: refuses programs that run other programs, allows
     assert.equal(isReadOnlyBash(good), true, good);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Fixes from the second independent review (1.1.5)
+// ---------------------------------------------------------------------------
+
+// Run the CLI as Claude's shell and return only the exit code and error text.
+function asClaude(w, args, nowIso) {
+  // Same helper as above, kept short for the table of cases below.
+  return cliAs("claude", w, args, nowIso);
+}
+
+// Protects tomorrow's evening: while tonight's lock is on, Claude must not loosen the regular schedule either.
+test("cli: while locked, Claude can't loosen the schedule for tomorrow (cutoff, morning, days off)", () => {
+  // A weekday with a 21:00 cutoff, 08:00 morning and the weekend off.
+  const w = world({ cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" });
+  // You shut down at 14:00 on a Thursday: the lock is on until the next morning.
+  assert.equal(cliAs("you", w, ["shutdown"], "2026-10-29T14:00:00").code, 0);
+  // Each of these would leave the lock alone tonight but weaken every evening after it.
+  for (const args of [["config", "cutoff", "off"], ["config", "cutoff", "23:59"], ["config", "morning", "06:00"], ["config", "daysOff", "off"], ["config", "daysOff", "sat"]]) {
+    // Run it as Claude, still during the lock.
+    const r = asClaude(w, args, "2026-10-29T14:30:00");
+    // Exit code 1 means it was refused.
+    assert.equal(r.code, 1, args.join(" "));
+  }
+  // Changes that keep or tighten the schedule are still fine: an earlier cutoff, a later morning, an extra day off.
+  for (const args of [["config", "cutoff", "20:00"], ["config", "morning", "09:00"], ["config", "daysOff", "fri,sat,sun"]]) {
+    // Run it as Claude during the lock.
+    assert.equal(asClaude(w, args, "2026-10-29T14:30:00").code, 0, args.join(" "));
+  }
+});
+
+// Protects the same thing at night and on a day off, where "tonight" does not change either.
+test("cli: at night or on a day off, Claude can't push the cutoff later or remove it", () => {
+  // Weekend off, 21:00 cutoff.
+  const w = world({ cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" });
+  // 02:00 on a Friday is still Thursday's quiet time: a later cutoff would weaken tomorrow evening.
+  assert.equal(asClaude(w, ["config", "cutoff", "23:59"], "2026-10-30T02:00:00").code, 1);
+  // Saturday afternoon is a day off: removing the cutoff must be refused too.
+  assert.equal(asClaude(w, ["config", "cutoff", "off"], "2026-10-31T14:00:00").code, 1);
+  // An earlier cutoff only tightens, so it is allowed even at 02:00.
+  assert.equal(asClaude(w, ["config", "cutoff", "20:00"], "2026-10-30T02:00:00").code, 0);
+});
+
+// Protects the promise "stopped at its next tool call": reading is allowed until the handoff exists, not after.
+test("pause: once the handoff exists even a read stops the agent", () => {
+  // Start a shutdown.
+  const w = world();
+  hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  // Before the handoff, a Read is allowed so Claude can look around.
+  assert.equal(hook(w, "pause.mjs", { tool_name: "Read", tool_input: { file_path: "a.js" } }, "2026-10-29T18:01:00").out, "");
+  // Claude writes the handoff.
+  fs.writeFileSync(path.join(w.project, "TOMORROW.md"), "Stopped at: x\nFirst step tomorrow: y\nOpen question: none\n");
+  // Now a plain Read ends the run (continue:false) instead of letting Claude carry on reading.
+  const out = JSON.parse(hook(w, "pause.mjs", { tool_name: "Read", tool_input: { file_path: "a.js" } }, "2026-10-29T18:02:00").out);
+  assert.equal(out.continue, false);
+});
+
+// Protects the time label: "tomorrow 08:00" must not get a weekday just because DST made the day 25 hours long.
+test("lib: dayAndTime adds a weekday only for times two or more calendar days away", async () => {
+  // Import the helper directly; it is a pure function.
+  const { dayAndTime } = await import(path.join(ROOT, "scripts", "lib.mjs"));
+  // Thursday 07:00 -> Friday 08:00 is tomorrow: no weekday.
+  assert.equal(dayAndTime(new Date("2026-10-30T08:00:00"), new Date("2026-10-29T07:00:00")), "08:00");
+  // Saturday 12:00 -> Monday 08:00 is two days away: weekday shown.
+  assert.equal(dayAndTime(new Date("2026-11-02T08:00:00"), new Date("2026-10-31T12:00:00")), "Mon 08:00");
+});
+
+// Protects the shell allowlist: shortened spellings of --follow (GNU tail accepts them) must not get through.
+test("pause: tail only takes a few explicit flags", () => {
+  // Start a shutdown.
+  const w = world();
+  hook(w, "gate.mjs", { session_id: "other", prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  // Helper: run a Bash command through the pause hook and return its output.
+  const bash = (command) => hook(w, "pause.mjs", { tool_name: "Bash", tool_input: { command } }, "2026-10-29T18:01:00").out;
+  // Normal uses are allowed.
+  for (const ok of ["tail -n 20 app.log", "tail -20 app.log"]) assert.equal(bash(ok), "", ok);
+  // Following (also shortened) is denied because it would never end.
+  for (const bad of ["tail -f app.log", "tail --fol app.log", "tail --follow app.log"]) {
+    assert.equal(JSON.parse(bash(bad)).hookSpecificOutput.permissionDecision, "deny", bad);
+  }
+});

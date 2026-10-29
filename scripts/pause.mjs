@@ -64,10 +64,6 @@ try {
   const tool = String(input.tool_name || "");
   // The tool's arguments, but only if they are an object; otherwise an empty object so reading fields can't throw.
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
-  // Exit 0 = allow: reading files cannot change anything.
-  if (READ_ONLY.has(tool)) process.exit(0);
-  // Exit 0 = allow: a shell command that is only reading (ls, grep, git log...) is judged safe by isReadOnlyBash.
-  if (tool === "Bash" && isReadOnlyBash(toolInput.command)) process.exit(0);
 
   // Where this project's handoff file must live: TOMORROW.md in the project root.
   const handoff = path.join(projectDir(input), "TOMORROW.md");
@@ -112,6 +108,12 @@ try {
     // Exit 0 = the hook itself succeeded. The deny and stop are carried by the JSON above, not by the exit code.
     process.exit(0);
   }
+
+  // The handoff is not written yet, so reading is still fine: Claude needs to look around to write it.
+  // Exit 0 = allow: reading files cannot change anything.
+  if (READ_ONLY.has(tool)) process.exit(0);
+  // Exit 0 = allow: a shell command that is only reading (ls, grep, git log...) is judged safe by isReadOnlyBash.
+  if (tool === "Bash" && isReadOnlyBash(toolInput.command)) process.exit(0);
 
   // Handoff not written yet: record that the agent was asked to pause.
   logEvent("pause-requested", { tool });

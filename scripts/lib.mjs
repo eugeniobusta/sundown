@@ -361,7 +361,7 @@ function awakeUntil(date) {
 }
 
 // The one question every hook asks: is Sundown active right now, and why?
-// Returns { why: "lock" | "quiet" | null, until: Date | null }.
+// Returns { why: "lock" | "dayoff" | "quiet" | null, until: Date | null }.
 export function sundownState(date, cfg) {
   // An early wake beats everything else: Sundown is off for now.
   if (awakeUntil(date)) return { why: null, until: null };
@@ -387,11 +387,21 @@ export function reasonText(state, cfg) {
   return `it's after your ${cfg.cutoff} cutoff (until ${dayAndTime(state.until)})`;
 }
 
-// "08:00", or "Mon 08:00" when it isn't tomorrow morning (after a day off).
+// "08:00", or "Mon 08:00" when it isn't today or tomorrow (for example after a day off).
 export function dayAndTime(date, from = now()) {
-  // 86400000 ms = one day (24 * 60 * 60 * 1000). If the end is more than a day away, include
-  // the weekday name; the array is indexed by getDay() (0 = Sunday).
-  return date - from > 86400000 ? `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()]} ${hhmm(date)}` : hhmm(date);
+  // Midnight at the start of the "from" day, so we count calendar days and not 24-hour blocks
+  // (a daylight-saving day is 23 or 25 hours long, and "tomorrow 08:00" can be over 24h away).
+  const today = new Date(from);
+  // Set the clock part to 00:00:00.000.
+  today.setHours(0, 0, 0, 0);
+  // Midnight at the start of the day the time falls on.
+  const day = new Date(date);
+  // Set the clock part to 00:00:00.000.
+  day.setHours(0, 0, 0, 0);
+  // Whole calendar days between the two; round() absorbs the odd hour of a daylight-saving change.
+  const daysAway = Math.round((day - today) / 86400000);
+  // Today or tomorrow: the time alone is clear. Further away: add the weekday name (getDay() 0 = Sunday).
+  return daysAway >= 2 ? `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()]} ${hhmm(date)}` : hhmm(date);
 }
 
 // Minutes left before today's cutoff, or null when there is no cutoff or Sundown is
@@ -552,7 +562,9 @@ function segmentIsReadOnly(words) {
       return flags.every((f) => PLAIN_FLAG.test(f));
     // tail is allowed but not in follow mode.
     case "tail":
-      return flags.every((f) => PLAIN_FLAG.test(f) && !/^-[A-Za-z0-9]*[fF]/.test(f) && !/^--follow/.test(f)); // -f never ends
+      // Only these flags, or a plain count such as -20. GNU tail also accepts shortened
+      // spellings of --follow, which never ends, so a flag list is safer than a "no follow" check.
+      return flags.every((f) => ["-n", "-c", "-q", "-v"].includes(f) || /^-\d+$/.test(f));
     // find is checked against its own exact flag list.
     case "find":
       // Every word that starts with "-" must be on the list (so -exec and -delete never pass).

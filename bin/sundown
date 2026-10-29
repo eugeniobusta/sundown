@@ -31,6 +31,8 @@ import { fileURLToPath } from "node:url";
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
   nextCutoffAfter, reasonText, dayAndTime, DEFAULTS,
+  // Minutes after midnight for "HH:MM"; used to compare cutoffs and mornings.
+  toMinutes,
   // Used to check a value is allowed before deciding whether it would loosen Sundown.
   isValidSetting,
 } from "../scripts/lib.mjs";
@@ -82,11 +84,14 @@ function status() {
 // Changing one of these while Sundown is on would let Claude end the lock early, so config() guards them.
 const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
 
-// Would this change make Sundown less strict than it is right now? Only meaningful while
-// Sundown is on. It does if it would switch Sundown off now, end the quiet period sooner
-// (an earlier morning, or removing a day off), or lengthen what one "override:" allows.
-// Anything that keeps or tightens it (a later morning, an extra day off) is fine, which is
-// what lets /sundown:setup finish even after it has just switched Sundown on.
+// Would this change make Sundown less strict? Only meaningful while Sundown is on.
+// Two things count as looser: (1) a change that would end tonight sooner or switch Sundown
+// off right now, or lengthen what one "override:" allows; and (2) a change that makes the
+// WHOLE schedule looser (a later or removed cutoff, an earlier morning, fewer days off),
+// even if tonight stays the same, because otherwise Claude could quietly switch off
+// tomorrow's evening while tonight's lock is on. Anything that keeps or tightens the
+// schedule (a later morning, an earlier cutoff, an extra day off) is fine, which is what
+// lets /sundown:setup finish even after it has just switched Sundown on.
 function loosens(key, value) {
   // How Sundown stands right now (why it is on, and until when).
   const current = sundownState(date, cfg);
@@ -96,8 +101,47 @@ function loosens(key, value) {
   if (key === "overrideMinutes") return value > cfg.overrideMinutes;
   // Work out how Sundown would stand with the new value, without saving anything.
   const after = sundownState(date, { ...cfg, [key]: value });
-  // Looser if it would no longer be on at all, or would end earlier than it does now.
-  return !after.why || after.until < current.until;
+  // Looser tonight if it would no longer be on at all, or would end earlier than it does now.
+  if (!after.why || after.until < current.until) return true;
+  // Otherwise tonight is the same, so check whether the schedule from tomorrow on gets looser.
+  return loosensSchedule(key, value);
+}
+
+// Does this change make the regular schedule (every evening and day off) looser?
+function loosensSchedule(key, value) {
+  // How many minutes after the morning time an evening starts, so cutoffs can be compared
+  // even when they cross midnight. A cutoff equal to the morning means "never quiet", the
+  // loosest of all, so 0 is counted as a full day (1440 minutes).
+  const evening = (cutoff) => ((toMinutes(cutoff) - toMinutes(cfg.morning) + 1440) % 1440) || 1440;
+  // The cutoff is looser if it is removed or starts later in the evening.
+  if (key === "cutoff") {
+    // There was no cutoff before, so any cutoff makes things stricter, never looser.
+    if (cfg.cutoff === "") return false;
+    // Removing the cutoff altogether is the loosest change.
+    if (value === "") return true;
+    // A cutoff that starts later after the morning gives a shorter evening.
+    return evening(value) > evening(cfg.cutoff);
+  }
+  // The morning is looser if it makes the quiet period (cutoff to morning) shorter.
+  if (key === "morning") {
+    // With no cutoff there is no quiet period to measure, so just compare the clock times: earlier ends the lock sooner.
+    if (cfg.cutoff === "") return toMinutes(value) < toMinutes(cfg.morning);
+    // Length of the quiet period in minutes for a given morning, counted from the cutoff (wraps past midnight).
+    const quiet = (morning) => (toMinutes(morning) - toMinutes(cfg.cutoff) + 1440) % 1440;
+    // Shorter quiet period = looser.
+    return quiet(value) < quiet(cfg.morning);
+  }
+  // Days off are looser if any day that is off now would stop being off.
+  if (key === "daysOff") {
+    // The days off now, as a list (empty when there are none).
+    const before = cfg.daysOff ? cfg.daysOff.split(",") : [];
+    // The days off after the change, as a list.
+    const afterDays = value ? value.split(",") : [];
+    // Looser if some current day off is missing from the new list.
+    return before.some((day) => !afterDays.includes(day));
+  }
+  // No other setting changes how strict the schedule is.
+  return false;
 }
 
 // A number, or the original text if it isn't one (so the error shows what you typed).

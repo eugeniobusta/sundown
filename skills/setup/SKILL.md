@@ -25,4 +25,6 @@ Order matters: ask the questions in the order below, but apply the cutoff **last
 6. **Apply the cutoff.** Now run `sundown config cutoff <HH:MM>` (or `sundown config cutoff off`) with the time from step 1.
 7. Finish with `sundown status` and a two-line summary: what happens at their cutoff, and that `/sundown:shutdown` ends the day early, `override:` sends one message anyway, and `/sundown:wake` switches it off.
 
+If Sundown is on right now (the status above says so), the user's own replies to your questions are held back by the evening gate like any other message. Say once, at the start: "Sundown is on, so please start each answer with `override:` (or run setup in the daytime)."
+
 Don't change settings the user didn't agree to.

@@ -4,6 +4,15 @@
 
 **A Claude Code plugin that gives your evenings back.**
 
+## In 30 seconds
+
+```
+/plugin marketplace add eugeniobusta/sundown
+/plugin install sundown@sundown
+```
+
+Restart Claude Code, then run `/sundown:setup` and choose your evening cutoff. From then on, "one more prompt" after your cutoff is held back; `/sundown:shutdown` ends the day, writes `TOMORROW.md` and stops your agents; the next morning your first session opens with that note. It needs Node.js 18 or newer and nothing else. Everything stays on your machine unless you turn on phone pushes.
+
 ## The problem: compression burnout
 
 AI coding tools made each task faster, and the day got longer anyway. The time AI saves doesn't come back to you; it gets filled with more work. There is always one more prompt, and an agent is always still running, so the evening quietly becomes part of the workday. That's **compression burnout**: the same pressure, packed into more hours.
@@ -86,23 +95,23 @@ Settings (`sundown config <key> <value>`, or ask `/sundown:setup`):
 
 ## How it works
 
-Sundown is five small Node scripts attached to Claude Code hooks:
+Sundown is four small hook scripts, plus a shared library and a report builder, all plain Node with no dependencies:
 
 | Hook | Script | Job |
 |---|---|---|
 | `UserPromptSubmit` | `scripts/gate.mjs` | Holds back prompts after the cutoff, on a day off or during shutdown; handles `override:`, `/sundown:shutdown` and `/sundown:wake`; shows the once-a-day wrap-up note. |
-| `PreToolUse` | `scripts/pause.mjs` | During shutdown only: denies every tool call except reading files (including a short allowlist of plain read-only shell commands: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find` and `git status|log|diff|show`, with no quotes, globs, `;`, `&&` or `>`) and writing the project's `TOMORROW.md`, then stops the agent once the handoff exists. |
+| `PreToolUse` | `scripts/pause.mjs` | During shutdown only: denies every tool call except reading files (including a short allowlist of plain read-only shell commands, listed under Security notes) and writing the project's `TOMORROW.md`, then, on the next tool call of any kind, stops the agent once the handoff exists. |
 | `SessionStart` | `scripts/morning.mjs` | Shows yesterday's `TOMORROW.md` to you and to Claude; clears the lock when morning comes; points a fresh install at `/sundown:setup` once. |
 | `Notification`, `Stop` | `scripts/push.mjs` | Phone pushes, only if you set a topic. |
 
 `scripts/lib.mjs` holds the shared logic (settings, time, lock, state files), `scripts/report.mjs` builds the report, and `bin/sundown` is the command-line tool the skills call.
 
-Shutdown and wake are handled by the hook that only runs on messages a person typed. Inside Claude's own shell (Claude Code marks it with `CLAUDECODE=1`), the command-line `sundown wake` and `sundown shutdown` refuse to run, and so does any change to `cutoff`, `morning`, `daysOff` or `overrideMinutes` that would loosen Sundown while it's on (switch it off now, end the night sooner, or lengthen an override). So Claude can't switch Sundown off at 22:00 to keep working. Changes that keep or tighten it still work, so `/sundown:setup` can finish even when you run it in the evening.
+Shutdown and wake are handled by the hook that only runs on messages a person typed. Inside Claude's own shell (Claude Code marks it with `CLAUDECODE=1`), the command-line `sundown wake` and `sundown shutdown` refuse to run, and so does any change to `cutoff`, `morning`, `daysOff` or `overrideMinutes` that would loosen Sundown while it's on: switch it off, end tonight sooner, make every later evening looser (a later or removed cutoff, an earlier morning, fewer days off), or lengthen an override. So Claude can't switch Sundown off at 22:00 to keep working, tonight or tomorrow. Changes that keep or tighten it still work, so `/sundown:setup` can finish even when you run it in the evening; if Sundown is already on, your own answers to its questions need to start with `override:`.
 
 ## Privacy
 
 - **Everything stays on your machine** in `~/.sundown/`, with owner-only permissions (folder 0700, files 0600). If the folder or `config.json` already exists with looser permissions, Sundown tightens them.
-- **Your prompts are never stored.** The gate only checks whether a message starts with `override:` or `/sundown:`. The event log records the time and type of each event (blocked, override, shutdown, wake, pause, pause-requested, morning, handoff shown, wrap-up shown, push) and nothing else.
+- **Your prompts are never stored.** The gate only checks whether a message starts with `override:` or `/sundown:`. The event log records the time and type of each event (blocked, override, shutdown, wake, paused, pause-requested, morning, handoff, wrapup, push), plus a small label for some of them: the reason (blocked, override), the tool's name (paused, pause-requested), and whether a push was delivered. Nothing else.
 - **The report reads only timestamps** from Claude Code's session logs. It never reads prompt text, answers or code into the report.
 - **Phone pushes are off by default.** When you turn them on, the message says "Claude finished after 14 min" and nothing about your project. You can choose to include the project folder name (`sundown config pushDetail folder`). Code, prompts and file contents are never sent.
 - **The only network call** is the push to ntfy.sh (or your own ntfy server: `sundown config ntfyServer https://your.server`).
@@ -115,24 +124,24 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 - The **ntfy topic works like a password**: anyone who knows it can read and send your pushes. `sundown config ntfyTopic generate` makes a random 96-bit one. Don't share it or commit it.
 - `install-statusline` edits `~/.claude/settings.json`. It keeps a backup of your original (running it again doesn't overwrite that backup), keeps every other setting, and refuses to replace a status line that isn't Sundown's unless you pass `--force`.
 - The skills that run commands are limited to `Bash(sundown *)`.
-- During shutdown, the only shell commands allowed are on a short allowlist (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find` with name/type/depth flags, `git status|log|diff|show|ls-files`), optionally piped into each other. Quotes, globs, `$`, `;`, `&`, `<`, `>` and every other program are denied, so there is no way to smuggle a second command in.
+- During shutdown, the only shell commands allowed are on a short allowlist (`ls`, `cat`, `head`, `wc`, `pwd`, `grep`, `tail` with `-n`/`-c`/`-q`/`-v`, `find` with only its name, path, type, depth, newer, mtime, size and not/and/or tests, and `git status|log|diff|show|ls-files` without output or external-program flags), optionally piped into each other. Quotes, globs, `$`, `;`, `&`, `<`, `>` and every other program are denied, so there is no way to smuggle a second command in.
 
 ## Limits (be honest about them)
 
 - **It's a commitment device, not a lock.** You can always type `override:`, run `/sundown:wake` or disable the plugin. The point is that stopping becomes the default and continuing becomes a choice you can see in your report.
 - **It only covers Claude Code.** Other editors and terminals are untouched.
 - **A running agent stops at its next tool call.** That call is refused, and the run is stopped. A single long command that has already started (a ten-minute build) runs to the end.
-- **The handoff goes in the folder Claude Code was started in.** `TOMORROW.md` is looked for there, not in a parent folder.
+- **The handoff goes in the folder Claude Code reports as its current directory** (it follows `cd`). `TOMORROW.md` is looked for there, not in a parent folder.
 - **One cutoff for every working day.** Days off can be whole days, but there's no separate cutoff per weekday yet.
 - **Claude can't switch Sundown off by accident, but it isn't sandboxed.** The `CLAUDECODE` check stops `sundown wake`, `sundown shutdown` and loosening settings while Sundown is on. Something deliberately written to get around it (clearing that variable, or editing `~/.sundown` directly) could. While Sundown is off, Claude can change settings, because that's how `/sundown:setup` works. It's a commitment device for you, not a security boundary against Claude.
 - **The report counts prompts, not hours.** It's a picture of when you were working, not a timesheet.
-- `pause.mjs` starts Node on every tool call, which adds roughly 80 ms per call on a laptop (measured; almost all of it is Node starting up).
+- `pause.mjs` starts Node on every tool call, which adds roughly 50 ms per call on a laptop (measured: 48 ms against 39 ms for an empty Node start).
 - The status line points at the installed copy of the plugin. Run `sundown install-statusline` again after updating Sundown.
 
 ## Development
 
 ```
-node --test test/*.test.mjs        # 55 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
+node --test test/*.test.mjs        # 60 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
 claude --plugin-dir .              # try the plugin without installing it
 claude plugin validate --strict .
 ```
