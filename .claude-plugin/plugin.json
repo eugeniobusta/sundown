@@ -1,0 +1,14 @@
+{
+  "name": "sundown",
+  "displayName": "Sundown",
+  "description": "Gives your evenings back: stops 'one more prompt' after your cutoff, pauses running agents when you shut down, leaves tomorrow's first step in TOMORROW.md, and calls your phone so you can walk away.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Eugenio Bustamante",
+    "url": "https://github.com/eugeniobusta"
+  },
+  "homepage": "https://github.com/eugeniobusta/sundown",
+  "repository": "https://github.com/eugeniobusta/sundown",
+  "license": "MIT",
+  "keywords": ["wellbeing", "burnout", "focus", "productivity", "hooks"]
+}

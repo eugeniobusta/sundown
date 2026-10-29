@@ -1,0 +1,71 @@
+// pause.mjs — PreToolUse hook: pauses agents that are still running after you shut down.
+//
+// Runs before EVERY tool call Claude makes, in every session, while the plugin is on.
+// It only acts when the shutdown LOCK is on (not just because it's late), so it
+// never surprises you in the middle of the day.
+//
+// While locked:
+//   1. A session with an override pass works normally.
+//   2. Read-only tools (Read, Glob, Grep, LS) are allowed, so Claude can look at
+//      what it was doing and write an accurate handoff.
+//   3. Writing or editing TOMORROW.md is allowed: that's the handoff.
+//   4. Once TOMORROW.md has been written since the lock was set, the next tool
+//      call stops the agent completely ({"continue": false}).
+//   5. Anything else is denied, with a reason that tells Claude exactly what to do.
+//
+// Fail-open: on any unexpected error, allow the tool call.
+
+import fs from "node:fs";
+import path from "node:path";
+import {
+  readHookInput, now, lockState, hasPass, projectDir, logEvent, hhmm,
+} from "./lib.mjs";
+
+// Tools that only look at files. Allowed during the lock so Claude can write an
+// accurate handoff.
+const READ_ONLY = new Set(["Read", "Glob", "Grep", "LS"]);
+
+try {
+  const input = await readHookInput();
+  const date = now();
+  const lock = lockState(date);
+  // No lock, or the lock already reached its morning: never interfere.
+  if (!lock || !lock.active) process.exit(0);
+  if (hasPass(input.session_id, date)) process.exit(0);
+
+  const tool = String(input.tool_name || "");
+  const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
+  if (READ_ONLY.has(tool)) process.exit(0);
+
+  const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
+  if ((tool === "Write" || tool === "Edit") && path.basename(filePath) === "TOMORROW.md") process.exit(0);
+
+  const handoff = path.join(projectDir(input), "TOMORROW.md");
+  let handoffWritten = false;
+  try { handoffWritten = fs.statSync(handoff).mtime >= lock.setAt; } catch { /* no handoff yet */ }
+
+  if (handoffWritten) {
+    logEvent("paused", { tool });
+    console.log(JSON.stringify({
+      continue: false,
+      stopReason: `☾ Sundown: paused until ${hhmm(lock.until)}. Handoff saved in TOMORROW.md.`,
+    }));
+    process.exit(0);
+  }
+
+  logEvent("pause-requested", { tool });
+  console.log(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason:
+        `The user has shut down for the day (Sundown, until ${hhmm(lock.until)}). Don't continue the task. ` +
+        "Write a short handoff to TOMORROW.md in the project root with exactly three lines: " +
+        "\"Stopped at: …\", \"First step tomorrow: …\", \"Open question: …\" " +
+        "(be concrete: files, functions, what's half-done). Then stop and end your turn.",
+    },
+  }));
+  process.exit(0);
+} catch {
+  process.exit(0);
+}

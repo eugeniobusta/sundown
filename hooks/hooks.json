@@ -1,0 +1,43 @@
+{
+  "description": "Sundown: block new prompts after your cutoff, pause running agents after /sundown:shutdown, greet you with TOMORROW.md in the morning, and (if you opt in) push to your phone when Claude needs you or finishes.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/pause.mjs\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/morning.mjs\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt|permission_prompt",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/push.mjs\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/push.mjs\"", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

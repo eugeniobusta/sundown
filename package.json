@@ -1,0 +1,13 @@
+{
+  "name": "sundown",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Claude Code plugin that gives your evenings back.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

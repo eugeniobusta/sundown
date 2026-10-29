@@ -1,0 +1,159 @@
+#!/usr/bin/env node
+// sundown — the command-line side of the plugin.
+//
+// Claude Code puts a plugin's bin/ folder on the PATH of its Bash tool, so inside
+// Claude Code (and in the skills) this is just `sundown <command>`. You can also run
+// it yourself from a terminal with:  node /path/to/sundown/bin/sundown <command>
+//
+//   sundown status                  is Sundown on? time until your cutoff, settings
+//   sundown shutdown                switch the lock on until your morning time
+//   sundown wake                    switch it off until your next cutoff
+//   sundown config                  show settings
+//   sundown config <key> <value>    change one (cutoff 21:00 · cutoff off · morning 08:00 ·
+//                                   ntfyTopic generate · ntfyTopic off · pushDetail folder ·
+//                                   minTurnSeconds 60 · overrideMinutes 20)
+//   sundown report [days]           the evening report (default 7 days, max 90)
+//   sundown test-push               send a test notification to your phone
+//   sundown statusline              one line for Claude Code's status bar
+//   sundown install-statusline      add that line to ~/.claude/settings.json (asks first)
+//
+// No shell is ever spawned and no network is used except by test-push.
+
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
+  nextCutoffAfter, DEFAULTS,
+} from "../scripts/lib.mjs";
+import { buildReport } from "../scripts/report.mjs";
+import { send } from "../scripts/push.mjs";
+
+const [command = "help", ...args] = process.argv.slice(2);
+const cfg = readConfig();
+const date = now();
+
+// "2h 05m" style durations.
+function duration(ms) {
+  const min = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(min / 60);
+  return h ? `${h}h ${String(min % 60).padStart(2, "0")}m` : `${min}m`;
+}
+
+// Show a topic without printing the whole secret into logs.
+const mask = (topic) => (topic ? `${topic.slice(0, 10)}… (set)` : "off");
+
+function status() {
+  const s = sundownState(date, cfg);
+  const lines = [];
+  if (s.why === "lock") lines.push(`☾ Sundown is ON: you shut down for today. Back at ${hhmm(s.until)}.`);
+  else if (s.why === "quiet") lines.push(`☾ Sundown is ON: it's after your ${cfg.cutoff} cutoff. Back at ${hhmm(s.until)}.`);
+  else if (cfg.cutoff) lines.push(`☀ Sundown is off. Your cutoff is ${cfg.cutoff}, in ${duration(nextCutoffAfter(date, cfg) - date)}.`);
+  else lines.push("☀ Sundown is off. No evening cutoff yet (run /sundown:setup). /sundown:shutdown still works.");
+  lines.push(`Morning: ${cfg.morning} · Phone pushes: ${mask(cfg.ntfyTopic)} · Push detail: ${cfg.pushDetail} · Override lasts ${cfg.overrideMinutes} min`);
+  console.log(lines.join("\n"));
+}
+
+function config() {
+  if (args.length === 0) {
+    console.log(JSON.stringify({ ...cfg, ntfyTopic: mask(cfg.ntfyTopic) }, null, 2));
+    return;
+  }
+  const [key, raw = ""] = args;
+  let value = raw;
+  if (raw === "off" && (key === "cutoff" || key === "ntfyTopic")) value = "";
+  if (key === "ntfyTopic" && raw === "generate") {
+    // 96 random bits: nobody can guess it, so nobody else can read or send your pushes.
+    value = `sundown-${crypto.randomBytes(12).toString("hex")}`;
+  }
+  if (key === "minTurnSeconds" || key === "overrideMinutes") value = Number(raw);
+  setConfig(key, value); // throws a readable error on a bad key or value
+  if (key === "ntfyTopic" && value) {
+    console.log(`Phone pushes ON. In the ntfy app, subscribe to this topic (keep it private):\n${value}`);
+  } else {
+    console.log(`${key} = ${value === "" ? "off" : value}`);
+  }
+}
+
+function statusline() {
+  // Claude Code sends session JSON on stdin; we don't need it, so we don't read it.
+  const s = sundownState(date, cfg);
+  if (s.why === "lock") return console.log(`☾ Shut down · back ${hhmm(s.until)}`);
+  if (s.why === "quiet") return console.log(`☾ After sundown · "override:" to send`);
+  if (!cfg.cutoff) return console.log("☀ Sundown: no cutoff set");
+  const left = nextCutoffAfter(date, cfg) - date;
+  if (left <= 30 * 60000) return console.log(`◐ ${duration(left)} to sundown · time to wrap up`);
+  console.log(`☀ ${duration(left)} to sundown (${cfg.cutoff})`);
+}
+
+function installStatusline() {
+  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  const file = path.join(base, "settings.json");
+  const self = fs.realpathSync(fileURLToPath(import.meta.url));
+  const wanted = { type: "command", command: `node "${self}" statusline`, refreshInterval: 60 };
+
+  let settings = {};
+  if (fs.existsSync(file)) {
+    try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch {
+      console.error(`Not touching ${file}: it isn't valid JSON. Fix it first.`);
+      process.exit(1);
+    }
+  }
+  const current = settings.statusLine;
+  if (current && !String(current.command || "").includes("sundown") && !args.includes("--force")) {
+    console.error(`You already have a status line:\n  ${JSON.stringify(current)}\nNot replacing it. Re-run with --force to replace it (a backup is kept).`);
+    process.exit(1);
+  }
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.sundown-backup`);
+  settings.statusLine = wanted;
+  fs.mkdirSync(base, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  console.log(`Status line installed in ${file} (backup: settings.json.sundown-backup).\nIt points at this copy of the plugin; run this again after updating Sundown.`);
+}
+
+async function testPush() {
+  if (!cfg.ntfyTopic) {
+    console.error("Phone pushes are off. Run: sundown config ntfyTopic generate");
+    process.exit(1);
+  }
+  const ok = await send(cfg, { title: "Sundown", body: "Test: pushes work. Walk away, I'll call you.", tags: "crescent_moon" });
+  logEvent("push", { event: "test", ok });
+  console.log(ok ? "Sent. Check your phone." : `Couldn't reach ${cfg.ntfyServer}. Check your connection.`);
+  if (!ok) process.exit(1);
+}
+
+try {
+  switch (command) {
+    case "status": status(); break;
+    case "shutdown": {
+      const lock = lockOn(date, cfg);
+      logEvent("shutdown");
+      console.log(`☾ Shut down until ${hhmm(new Date(lock.until))}.`);
+      break;
+    }
+    case "wake": {
+      const until = wake(date, cfg);
+      logEvent("wake");
+      console.log(`☀ Sundown is off until ${hhmm(until)}.`);
+      break;
+    }
+    case "config": config(); break;
+    case "report": {
+      const days = Math.min(90, Math.max(1, parseInt(args[0], 10) || 7));
+      const { text } = await buildReport({ date, cfg, days });
+      console.log(text);
+      break;
+    }
+    case "statusline": statusline(); break;
+    case "install-statusline": installStatusline(); break;
+    case "test-push": await testPush(); break;
+    default:
+      console.log("Usage: sundown status | shutdown | wake | config [key value] | report [days] | test-push | statusline | install-statusline");
+      console.log(`Settings: ${Object.keys(DEFAULTS).join(", ")}`);
+  }
+} catch (err) {
+  console.error(`sundown: ${err.message}`);
+  process.exit(1);
+}

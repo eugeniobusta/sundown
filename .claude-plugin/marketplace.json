@@ -1,0 +1,14 @@
+{
+  "name": "sundown",
+  "description": "Sundown: a Claude Code plugin that gives your evenings back.",
+  "owner": {
+    "name": "Eugenio Bustamante"
+  },
+  "plugins": [
+    {
+      "name": "sundown",
+      "source": "./",
+      "description": "Stops 'one more prompt' after your cutoff, pauses agents at shutdown, and leaves tomorrow's first step in TOMORROW.md."
+    }
+  ]
+}
