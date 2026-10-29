@@ -21,4 +21,4 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       # No dependencies to install: Sundown uses only Node's standard library.
-      - run: node --test test/
+      - run: node --test test/*.test.mjs

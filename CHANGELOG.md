@@ -15,6 +15,7 @@
 - **The report miscounted evenings when the cutoff was after midnight** (e.g. 01:00). It now uses the same rule as the gate.
 - **Re-running `install-statusline` overwrote the backup** of your original `settings.json`. The backup is now kept.
 - **During shutdown, any file named `TOMORROW.md` could be written.** Now only the project's own handoff can be.
+- **`sundown` didn't start on Node 18.** `bin/sundown` has no file extension, and `package.json` didn't say it's an ES module, so only Node 20+ guessed right. `package.json` now declares `"type": "module"`. CI covers Node 18, 20 and 22 so this can't come back.
 - **With a faked clock (`SUNDOWN_NOW`), the agent wasn't stopped after writing its handoff.** The lock now also records the real time.
 
 ### Tests

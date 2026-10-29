@@ -1,4 +1,4 @@
-// Tests for Sundown. Run with:  node --test test/
+// Tests for Sundown. Run with:  node --test test/*.test.mjs
 //
 // Every test gets its own temporary SUNDOWN_DIR and fake "now" (SUNDOWN_NOW), so the
 // tests never touch your real ~/.sundown and give the same result at any time of day.
