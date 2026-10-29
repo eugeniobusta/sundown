@@ -133,7 +133,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 - **A running agent stops at its next tool call.** That call is refused, and the run is stopped. A single long command that has already started (a ten-minute build) runs to the end.
 - **The handoff goes in the folder Claude Code reports as its current directory** (it follows `cd`). `TOMORROW.md` is looked for there, not in a parent folder.
 - **One cutoff for every working day.** Days off can be whole days, but there's no separate cutoff per weekday yet.
-- **Claude can't switch Sundown off by accident, but it isn't sandboxed.** The `CLAUDECODE` check stops `sundown wake`, `sundown shutdown`, loosening the schedule and repointing pushes (`ntfyServer`). Something deliberately written to get around it (clearing that variable, or editing `~/.sundown` directly) could. It's a commitment device for you, not a security boundary against Claude.
+- **Claude can't switch Sundown off by accident, but it isn't sandboxed.** The `CLAUDECODE` check stops `sundown wake`, `sundown shutdown`, loosening the schedule and repointing pushes (`ntfyServer`). Something deliberately written to get around it (clearing that variable, or editing `~/.sundown` directly) could. One gap by design: before you have chosen any cutoff, Claude can pick an earlier morning during first-time setup (there is no schedule to loosen yet). It's a commitment device for you, not a security boundary against Claude.
 - **The report counts prompts, not hours.** It's a picture of when you were working, not a timesheet.
 - `pause.mjs` starts Node on every tool call, which adds roughly 50 ms per call on a laptop (measured: 48 ms against 39 ms for an empty Node start).
 - The status line points at the installed copy of the plugin. Run `sundown install-statusline` again after updating Sundown.
@@ -141,7 +141,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 ## Development
 
 ```
-node --test test/*.test.mjs        # 63 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
+node --test test/*.test.mjs        # 65 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
 claude --plugin-dir .              # try the plugin without installing it
 claude plugin validate --strict .
 ```

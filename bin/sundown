@@ -153,7 +153,7 @@ function config() {
   // No arguments: just show every setting.
   if (args.length === 0) {
     // Print the settings as indented JSON. A missing cutoff or daysOff is shown as a readable word, and the ntfy topic is masked so it doesn't land in logs or screenshots.
-    console.log(JSON.stringify({ ...cfg, cutoff: cfg.cutoff || "off", daysOff: cfg.daysOff || "none", ntfyTopic: mask(cfg.ntfyTopic) }, null, 2));
+    console.log(JSON.stringify({ ...cfg, cutoff: cfg.cutoff || "off", daysOff: cfg.daysOff || "none", wrapUpMinutes: cfg.wrapUpMinutes || "off", ntfyTopic: mask(cfg.ntfyTopic) }, null, 2));
     // Nothing more to do when only showing.
     return;
   }
@@ -193,7 +193,7 @@ function config() {
   // Refuse only when: this is Claude's shell, the setting is one that can loosen, the value is valid, and this change really would loosen it right now.
   if ("CLAUDECODE" in process.env && LOOSENING.has(key) && isValidSetting(key, value) && loosens(key, value)) {
     // Say what was refused and give the exact command for the person to run in their own terminal.
-    throw new Error(`That would loosen Sundown, so only you can change ${key}. Run \`sundown config ${key} ${raw}\` in your own terminal, `);
+    throw new Error(`That would loosen Sundown, so only you can change ${key}. Run \`sundown config ${key} "${raw}"\` in your own terminal.`);
   }
   // Validate and save. An unknown key or a bad value throws, so nothing invalid is ever written.
   setConfig(key, value); // throws a readable error on a bad key or value

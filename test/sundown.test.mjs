@@ -825,7 +825,8 @@ test("cli: while Sundown is on, Claude can't loosen it; before the cutoff and in
     // Exit code 1 means it was refused.
     assert.equal(r.code, 1, `${key} ${value} should be refused`);
     assert.match(r.err, /only you can change/);
-    assert.match(r.err, new RegExp(`sundown config ${key} ${value}`)); // tells you the command to run yourself
+    // The message prints the exact command to run yourself, with the value in quotes so it can be pasted.
+    assert.match(r.err, new RegExp(`sundown config ${key} "${value}"`));
   }
   // Config on disk is unchanged.
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "21:00");
@@ -1079,7 +1080,8 @@ test("setup: finishes even when run in the evening, in either order", () => {
   cliAs("claude", c, ["config", "cutoff", "21:00"], evening);
   const refused = cliAs("claude", c, ["config", "morning", "07:00"], evening);
   assert.equal(refused.code, 1);
-  assert.match(refused.err, /sundown config morning 07:00/);
+  // The refusal prints the command to run yourself, with the value in quotes.
+  assert.match(refused.err, /sundown config morning "07:00"/);
   const saved = JSON.parse(fs.readFileSync(path.join(b.state, "config.json"), "utf8"));
   assert.equal(saved.morning, "09:00");
   assert.equal(saved.daysOff, "sat,sun");
@@ -1256,4 +1258,26 @@ test("wrap-up: it is off by default and only appears when you turn it on", () =>
   cli(w, ["config", "wrapUpMinutes", "30"]);
   // Now the gate prints the note.
   assert.match(hook(w, "gate.mjs", { prompt: "b" }, "2026-10-29T20:45:00").out, /time to land|cutoff/);
+});
+
+// Protects the message a person reads when Claude is refused: it must be a whole sentence with a runnable command.
+test("cli: the refusal message is complete and quotes the value so you can paste the command", () => {
+  // A normal schedule.
+  const w = world({ cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" });
+  // Claude tries to drop a day off, with spaces in the value.
+  const r = cliAs("claude", w, ["config", "daysOff", "Sat"], "2026-10-29T15:00:00");
+  // It is refused.
+  assert.equal(r.code, 1);
+  // The message ends with a full stop, not a dangling comma.
+  assert.match(r.err.trim(), /in your own terminal\.$/);
+  // The command is printed with the value in quotes.
+  assert.match(r.err, /sundown config daysOff "Sat"/);
+});
+
+// Protects the settings display: a setting that is off should say so, as the README does.
+test("cli: `sundown config` shows wrapUpMinutes as off when it is 0", () => {
+  // Default settings: the wrap-up note is off.
+  const w = world();
+  // The printed settings say "off", not 0.
+  assert.match(cli(w, ["config"]).out, /"wrapUpMinutes": "off"/);
 });
