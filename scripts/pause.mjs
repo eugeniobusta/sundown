@@ -19,12 +19,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  readHookInput, now, lockState, hasPass, projectDir, logEvent, hhmm,
+  readHookInput, now, lockState, hasPass, projectDir, logEvent, dayAndTime,
 } from "./lib.mjs";
 
 // Tools that only look at files. Allowed during the lock so Claude can write an
 // accurate handoff.
 const READ_ONLY = new Set(["Read", "Glob", "Grep", "LS"]);
+
+// Tools that may write the handoff.
+const HANDOFF_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
 
 // Same file? Compares folders with symlinks resolved (/tmp vs /private/tmp on macOS).
 function samePath(a, b) {
@@ -47,7 +50,10 @@ try {
 
   const handoff = path.join(projectDir(input), "TOMORROW.md");
   const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
-  if ((tool === "Write" || tool === "Edit") && filePath && samePath(path.resolve(projectDir(input), filePath), handoff)) {
+  // A TOMORROW.md that is itself a symlink could point anywhere: don't write through it.
+  let handoffIsLink = false;
+  try { handoffIsLink = fs.lstatSync(handoff).isSymbolicLink(); } catch { /* no file yet */ }
+  if (HANDOFF_TOOLS.has(tool) && !handoffIsLink && filePath && samePath(path.resolve(projectDir(input), filePath), handoff)) {
     process.exit(0);
   }
   let handoffWritten = false;
@@ -58,9 +64,16 @@ try {
 
   if (handoffWritten) {
     logEvent("paused", { tool });
+    // Stop the run AND deny this call. "continue: false" alone stops the run but still
+    // lets the tool call that triggered it execute (seen in real Claude Code).
     console.log(JSON.stringify({
       continue: false,
-      stopReason: `☾ Sundown: paused until ${hhmm(lock.until)}. Handoff saved in TOMORROW.md.`,
+      stopReason: `☾ Sundown: paused until ${dayAndTime(lock.until)}. Handoff saved in TOMORROW.md.`,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Sundown has paused this agent for the day. The handoff is saved in TOMORROW.md. Do not run this.",
+      },
     }));
     process.exit(0);
   }
@@ -71,7 +84,7 @@ try {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason:
-        `The user has shut down for the day (Sundown, until ${hhmm(lock.until)}). Don't continue the task. ` +
+        `The user has shut down for the day (Sundown, until ${dayAndTime(lock.until)}). Don't continue the task. ` +
         "Write a short handoff to TOMORROW.md in the project root with exactly three lines: " +
         "\"Stopped at: …\", \"First step tomorrow: …\", \"Open question: …\" " +
         "(be concrete: files, functions, what's half-done). Then stop and end your turn.",

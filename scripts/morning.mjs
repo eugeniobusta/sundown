@@ -32,17 +32,17 @@ try {
     logEvent("morning");
   }
 
-  if (claimWelcome()) {
-    console.log(JSON.stringify({
-      systemMessage: "☾ Sundown is installed. Run /sundown:setup to choose your evening cutoff. Until you do, it never blocks anything.",
-    }));
-    process.exit(0);
-  }
+  const welcome = claimWelcome();
+  const nudge = "☾ Sundown is installed. Run /sundown:setup to choose your evening cutoff. Until you do, it never blocks anything.";
 
   const state = sundownState(date, cfg);
   if (state.why) {
     const msg = `☾ Sundown is on: ${reasonText(state, cfg)}. Start a message with "override:" if you really need to.`;
-    console.log(JSON.stringify({ systemMessage: msg }));
+    console.log(JSON.stringify({ systemMessage: welcome ? `${msg}\n${nudge}` : msg }));
+    process.exit(0);
+  }
+  if (welcome) {
+    console.log(JSON.stringify({ systemMessage: nudge }));
     process.exit(0);
   }
 
