@@ -82,7 +82,8 @@ const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
 
 // A number, or the original text if it isn't one (so the error shows what you typed).
 // Parse a numeric setting. Number() gives NaN for text like "abc"; return that text unchanged so the validation error in setConfig can show what the user typed.
-const num = (s) => { const n = Number(s); return Number.isNaN(n) ? s : n; };
+// A blank value is not a number either (Number(" ") is 0), so it is also returned as typed and rejected.
+const num = (s) => { const n = Number(s); return Number.isNaN(n) || String(s).trim() === "" ? s : n; };
 
 function config() {
   // No arguments: just show every setting.

@@ -1030,5 +1030,14 @@ test("report: today's prompts are counted when the morning time is after noon", 
   fs.writeFileSync(path.join(proj, "s.jsonl"),
     JSON.stringify({ type: "user", uuid: "a", timestamp: new Date("2026-10-29T15:00:00").toISOString(), message: { content: "x" } }) + "\n");
   // Report at 16:00 the same day mentions "Prompts in the evening: N of 1". \d+ matches any number, so it only checks the prompt was counted (1) and not dropped.
-  assert.match(cli(w, ["report", "3"], "2026-10-29T16:00:00").out, /Prompts in the evening: \d+ of 1 /);
+  assert.match(cli(w, ["report", "3"], "2026-10-29T16:00:00").out, /Prompts in the evening: 0 of 1 /);
+});
+
+// A blank value must be rejected, not saved as 0 (Number(" ") is 0).
+test("cli: a blank number is rejected instead of being saved as 0", () => {
+  const w = world();
+  // A whitespace-only value for a numeric setting is an error (exit code 1).
+  assert.equal(cli(w, ["config", "minTurnSeconds", " "]).code, 1);
+  // The existing config was not touched: there is still no minTurnSeconds saved.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).minTurnSeconds, undefined);
 });

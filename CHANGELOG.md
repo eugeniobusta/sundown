@@ -13,8 +13,13 @@ Found by an independent code review; each one was reproduced before it was fixed
 - **The report dropped today's prompts when `morning` was after 12:00.**
 - **The shutdown skill suggested a command the hook refused** (`grep -rnE 'TODO|FIXME'`). It now suggests `grep -rn -e TODO -e FIXME .`.
 
+- **A blank value for a number setting was saved as 0** (`sundown config minTurnSeconds " "`). It is rejected now.
+
+### Changed
+- Every statement in the scripts, the CLI and the tests now has a comment above it explaining what it does and why.
+
 ### Tests
-- 49 tests (was 43).
+- 50 tests (was 43).
 
 ## 1.1.2
 

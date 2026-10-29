@@ -1,5 +1,5 @@
 // gate.mjs — UserPromptSubmit hook. Runs every time YOU press Enter in Claude Code,
-// before Claude sees the message. It does four jobs, in this order:
+// before Claude sees the message. It does five jobs, in this order:
 //
 //   1. Remembers when this turn started (push.mjs uses it to say "finished after 14 min").
 //   2. Handles the two commands that change Sundown's state:
