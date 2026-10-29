@@ -117,6 +117,8 @@ const SETTING_HINTS = {
   overrideMinutes: "Use a whole number of minutes, 1 to 240.",
   daysOff: "Use three-letter day names separated by commas, like sat,sun (not all seven days), or off.",
   wrapUpMinutes: "Use a whole number of minutes, 0 to 120, or off.",
+  dream: "Use on or off.",
+  dreamInstructions: "Use plain text up to 1000 characters, with no double quotes, backslashes or line breaks, or off.",
 };
 
 export function isValidSetting(key, value) {
@@ -181,13 +183,15 @@ export function setConfig(key, value) {
   // Refuse names that aren't real settings, and list the real ones in the error.
   if (!(key in DEFAULTS)) throw new Error(`Unknown setting "${key}". Known: ${Object.keys(DEFAULTS).join(", ")}`);
   // Refuse values the validator rejects.
-  if (!isValidSetting(key, value)) throw new Error(`"${value}" is not a valid value for ${key}. ${SETTING_HINTS[key]}`);
+  if (!isValidSetting(key, value)) throw new Error(`"${value}" is not a valid value for ${key}. ${SETTING_HINTS[key] || ""}`.trim());
   // The config file inside the state folder.
   const file = path.join(stateDir(), "config.json");
   // Start empty so a missing or broken file simply becomes a new one.
   let current = {};
   // Keep the other settings already in the file; a failed read means there are none.
   try { current = JSON.parse(fs.readFileSync(file, "utf8")); } catch { /* new file */ }
+  // A file holding "[1]", "null" or a number isn't a settings object: setting a key on it would be lost when it is written back, so start fresh.
+  if (current === null || typeof current !== "object" || Array.isArray(current)) current = {};
   // Change just the one setting.
   current[key] = value;
   // Write pretty JSON with a trailing newline. mode 0o600 = owner read/write only.
@@ -590,8 +594,12 @@ const GIT_BAD_FLAG = /output|exec|ext-diff|textconv|open-files-in-pager|pager|no
 // allowed when both are present. GIT_BAD_FLAG above refuses them anywhere else.
 const GIT_SAFE_DIFF_FLAGS = ["--no-ext-diff", "--no-textconv"];
 
-// Flags that make "git log" produce a diff (patch, stat, pickaxe...). "git diff" and "git show" always do.
-const GIT_DIFFY_FLAG = /^(-[puc]|-m|--patch|--cc|--stat|--numstat|--shortstat|--patch-with-stat|--word-diff|--color-words|--raw|--name-only|--name-status|-[SG].*)$/;
+// The only "git log" flags that never build a diff. Any other flag (-p, -U3, --unified=3, --binary,
+// --patch-with-raw, --stat, -S...) might, and a diff can run a program named in the repo's own git
+// config, so a "git log" with any flag not on this list needs both safe-diff flags too. A list of
+// bad flags was tried first and missed -U3 and --binary; a list of good flags can't miss a new one.
+// "git diff" and "git show" always build a diff, so they always need the safe flags.
+const GIT_LOG_SAFE_FLAG = /^(-\d+|-n|--oneline|--graph|--decorate|--no-decorate|--all|--abbrev-commit|--no-merges|--merges|--first-parent|--reverse|--date-order|--topo-order|--author-date-order|--(author|since|until|after|before|grep|date|pretty)=.*)$/;
 
 // One command word + its arguments: is it safe?
 function segmentIsReadOnly(words) {
@@ -620,8 +628,8 @@ function segmentIsReadOnly(words) {
       // Every flag except the two safe-diff flags must be plain and not on the bad list.
       const others = flags.filter((f) => !GIT_SAFE_DIFF_FLAGS.includes(f));
       if (!others.every((f) => PLAIN_FLAG.test(f) && !GIT_BAD_FLAG.test(f))) return false;
-      // Does this command build a diff? "diff" and "show" always do; "log" only with a patch-like flag.
-      const buildsDiff = rest[0] === "diff" || rest[0] === "show" || (rest[0] === "log" && others.some((f) => GIT_DIFFY_FLAG.test(f)));
+      // Does this command build a diff? "diff" and "show" always do; "log" does unless every flag is on the safe list.
+      const buildsDiff = rest[0] === "diff" || rest[0] === "show" || (rest[0] === "log" && !others.every((f) => GIT_LOG_SAFE_FLAG.test(f)));
       // If it does, both safe flags must be there.
       return !buildsDiff || GIT_SAFE_DIFF_FLAGS.every((f) => flags.includes(f));
     }

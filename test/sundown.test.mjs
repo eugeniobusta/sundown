@@ -826,7 +826,7 @@ test("cli: while Sundown is on, Claude can't loosen it; before the cutoff and in
     assert.equal(r.code, 1, `${key} ${value} should be refused`);
     assert.match(r.err, /only you can change/);
     // The message prints the exact command to run yourself, with the value in quotes so it can be pasted.
-    assert.match(r.err, new RegExp(`sundown config ${key} "${value}"`));
+    assert.match(r.err, new RegExp(`node ".*bin/sundown" config ${key} "${value}"`));
   }
   // Config on disk is unchanged.
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "21:00");
@@ -1081,7 +1081,7 @@ test("setup: finishes even when run in the evening, in either order", () => {
   const refused = cliAs("claude", c, ["config", "morning", "07:00"], evening);
   assert.equal(refused.code, 1);
   // The refusal prints the command to run yourself, with the value in quotes.
-  assert.match(refused.err, /sundown config morning "07:00"/);
+  assert.match(refused.err, /node ".*bin\/sundown" config morning "07:00"/);
   const saved = JSON.parse(fs.readFileSync(path.join(b.state, "config.json"), "utf8"));
   assert.equal(saved.morning, "09:00");
   assert.equal(saved.daysOff, "sat,sun");
@@ -1271,7 +1271,7 @@ test("cli: the refusal message is complete and quotes the value so you can paste
   // The message ends with a full stop, not a dangling comma.
   assert.match(r.err.trim(), /in your own terminal\.$/);
   // The command is printed with the value in quotes.
-  assert.match(r.err, /sundown config daysOff "Sat"/);
+  assert.match(r.err, /node ".*bin\/sundown" config daysOff "Sat"/);
 });
 
 // Protects the settings display: a setting that is off should say so, as the README does.
@@ -1565,4 +1565,93 @@ test("dream: a hardlinked DREAM.md or TOMORROW.md is denied", () => {
 test("dream: dreamInstructions cannot contain a quote, backslash or U+2028", async () => {
   const { isValidSetting } = await import(script("lib.mjs"));
   for (const bad of ['say "hi"', "a\\b", "a\u2028b"]) assert.equal(isValidSetting("dreamInstructions", bad), false);
+});
+
+// ---------------------------------------------------------------------------
+// Polish on 1.2.0: git log hole, plain-terminal commands, dream tools (1.2.1)
+// ---------------------------------------------------------------------------
+
+test("shell allowlist: git log with any flag that might build a diff needs the safe flags too", async () => {
+  const { isReadOnlyBash } = await import(script("lib.mjs"));
+  // -U3, --unified, --binary and --patch-with-raw all build a diff, and a diff can run a program from the repo's git config.
+  for (const bad of ["git log -U3", "git log --unified=3", "git log --binary", "git log --patch-with-raw", "git log --stat", "git log -p", "git log -Sfoo", "git log --some-new-flag"]) {
+    assert.equal(isReadOnlyBash(bad), false, bad);
+  }
+  for (const good of ["git log", "git log --oneline -5", "git log --graph --decorate --all", "git log --author=bob --since=2026-10-01", "git log -n 5", "git log -U3 --no-ext-diff --no-textconv", "git log --binary --no-ext-diff --no-textconv"]) {
+    assert.equal(isReadOnlyBash(good), true, good);
+  }
+});
+
+test("cli: the command a refusal tells you to run works as printed, in a plain terminal", () => {
+  const w = world(); // cutoff 21:00
+  const refused = cliAs("claude", w, ["config", "cutoff", "22:00"]);
+  assert.equal(refused.code, 1);
+  // Pull the command out of the message and run it exactly as printed, as you would in your own terminal.
+  const printed = refused.err.match(/Run `(node "[^`]+")`/);
+  assert.ok(printed, refused.err);
+  const env = { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: "2026-10-29T15:00:00" };
+  delete env.CLAUDECODE;
+  const ran = spawnSync("sh", ["-c", printed[1]], { env, encoding: "utf8" });
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "22:00");
+});
+
+test("cli: dream and dreamInstructions errors explain themselves instead of ending in 'undefined'", () => {
+  const w = world();
+  const a = cliAs("you", w, ["config", "dream", "maybe"]);
+  assert.equal(a.code, 1);
+  assert.match(a.err, /Use on or off\./);
+  assert.doesNotMatch(a.err, /undefined/);
+  const b = cliAs("you", w, ["config", "dreamInstructions", 'focus "x"']);
+  assert.equal(b.code, 1);
+  assert.match(b.err, /no double quotes/);
+  assert.doesNotMatch(b.err, /undefined/);
+});
+
+test("config: a settings file that isn't an object no longer swallows the change", () => {
+  for (const content of ["[1]", "null", "42", "{bad"]) {
+    const w = world();
+    fs.writeFileSync(path.join(w.state, "config.json"), content);
+    assert.equal(cliAs("you", w, ["config", "cutoff", "21:30"]).code, 0, content);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "21:30", content);
+    assert.match(cliAs("you", w, ["status"]).out, /Cutoff: 21:30/);
+  }
+});
+
+test("config: switching the wrap-up note off says 'off', not 0", () => {
+  const w = world();
+  assert.equal(cliAs("you", w, ["config", "wrapUpMinutes", "off"]).out.trim(), "wrapUpMinutes = off");
+  assert.equal(cliAs("you", w, ["config", "wrapUpMinutes", "30"]).out.trim(), "wrapUpMinutes = 30");
+});
+
+test("dream clear: finds the project's DREAM.md from a subfolder, and never reaches above the project", () => {
+  const w = world();
+  const run = (cwd) => spawnSync("node", [BIN, "dream", "clear"], {
+    cwd, env: { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: "2026-10-30T09:00:00", CLAUDE_CONFIG_DIR: w.claude }, encoding: "utf8",
+  });
+  const outer = tmp("sd-outer-");
+  const project = path.join(outer, "project");
+  fs.mkdirSync(path.join(project, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(project, "src", "deep"), { recursive: true });
+  fs.writeFileSync(path.join(outer, "DREAM.md"), "# Dream: someone else's, above the project\n");
+  fs.writeFileSync(path.join(project, "DREAM.md"), "# Dream: tidy up\n");
+  const r = run(path.join(project, "src", "deep"));
+  assert.match(r.stdout, /DREAM\.md deleted/);
+  assert.ok(!fs.existsSync(path.join(project, "DREAM.md")));
+  // Now there is none in the project: it must say so and leave the file above the project alone.
+  const again = run(path.join(project, "src"));
+  assert.match(again.stdout, /nothing to clear/);
+  assert.ok(fs.existsSync(path.join(outer, "DREAM.md")));
+});
+
+test("skills: setup applies days off and cutoff last and warns about loosening; dream discard only claims what happened", () => {
+  const setup = fs.readFileSync(path.join(ROOT, "skills", "setup", "SKILL.md"), "utf8");
+  const apply = setup.indexOf("sundown config daysOff <days>");
+  assert.ok(apply > setup.indexOf("sundown config dream on"), "daysOff is applied after the other steps");
+  assert.ok(setup.indexOf("sundown config cutoff <HH:MM>") > apply, "cutoff comes after daysOff");
+  assert.match(setup, /at any hour/);
+  assert.match(setup, /tell the user up front/);
+  const dream = fs.readFileSync(path.join(ROOT, "skills", "dream", "SKILL.md"), "utf8");
+  assert.match(dream, /DREAM\.md deleted/);
+  assert.match(dream, /don't claim anything was discarded/);
 });

@@ -30,7 +30,7 @@ Sundown builds the end of the day into Claude Code:
 - **Shutdown can also dream** (optional, off by default; turn it on with `sundown config dream on`). Before the handoff, Claude reads its memory of your project and writes `DREAM.md`: a proposed tidy-up, with duplicates merged, stale notes replaced and new lessons added. Nothing is changed that night. In the morning you read it and run `/sundown:dream apply` or `/sundown:dream discard`. See [Dreaming](#dreaming) below.
 - **A heads-up before your cutoff** (optional, off by default). With `sundown config wrapUpMinutes 30`, one short note says half an hour before your cutoff that it's a good moment to land the task. Claude is told the same thing, so it doesn't start anything big. Once a day, never more.
 - **Days off stay off** (optional). Choose days such as `sat,sun` and Sundown keeps them quiet from morning to morning.
-- **The next morning,** your first session opens with that handoff, so you start in two minutes instead of twenty.
+- **The next morning,** your first session opens with that handoff, so you don't spend the first part of the day working out where you were.
 - **You can leave the desk while an agent runs** (optional). Instead of watching the terminal, you get one phone push when Claude needs you or finishes a long task. It's off by default, and short turns never send anything.
 - **`/sundown:report`** shows whether your evenings are coming back: evenings off, your typical (median) finish time, both compared with the week before, and how many mornings started from a handoff. Built locally from Claude Code's session timestamps.
 
@@ -131,7 +131,7 @@ SUNDOWN_NOW=2026-10-29T22:00:00 claude
 4. "Next morning": `SUNDOWN_NOW=2026-10-30T08:30:00 claude`. The session opens with *"☀ Good morning. Last time you stopped here: …"* and, if a dream was written, *"☾ Last night's dream is in DREAM.md…"*. Run `/sundown:dream` to read it.
 5. Run `/sundown:report` to see the override and the held-back message.
 
-To see the optional wrap-up note instead, run `sundown config wrapUpMinutes 30`, start at `SUNDOWN_NOW=2026-10-29T20:40:00` and send any message.
+To see the optional wrap-up note instead, run `node <plugin folder>/bin/sundown config wrapUpMinutes 30` (the plain `sundown` command only exists inside Claude Code), start at `SUNDOWN_NOW=2026-10-29T20:40:00` and send any message.
 
 ## Commands
 
@@ -145,7 +145,7 @@ To see the optional wrap-up note instead, run `sundown config wrapUpMinutes 30`,
 | `/sundown:report` | Your last 7 days: evenings worked, typical (median) and latest finish (compared with the week before), days off kept, mornings started from a handoff, prompts held back, overrides. Also writes `~/.sundown/report.html`. |
 | `override: <message>` | Send one message anyway. That session keeps working for 20 minutes (configurable). |
 
-The same things work from a terminal: `node <plugin folder>/bin/sundown status | shutdown | wake | config | report | dream clear | test-push`.
+The same things work from a terminal: `node <plugin folder>/bin/sundown status | shutdown | wake | config | report | dream clear | test-push`. The plugin folder is `~/.claude/plugins/cache/sundown/sundown/<version>/` for an installed copy, or wherever you cloned the repo. (Inside Claude Code the plain `sundown` command works, because the plugin's `bin/` is on its PATH.)
 
 Settings (`sundown config <key> <value>`, or ask `/sundown:setup`):
 
@@ -215,7 +215,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 ## Development
 
 ```
-node --test test/*.test.mjs        # 88 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
+node --test test/*.test.mjs        # 95 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
 claude --plugin-dir .              # try the plugin without installing it
 claude plugin validate --strict .
 ```

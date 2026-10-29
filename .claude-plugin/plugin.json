@@ -2,7 +2,7 @@
   "name": "sundown",
   "displayName": "Sundown",
   "description": "Gives your evenings back: stops 'one more prompt' after your cutoff, pauses running agents when you shut down, leaves tomorrow's first step in TOMORROW.md, can optionally propose a tidy-up of Claude's memory for you to review, and can optionally ping your phone so you can walk away from the desk.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": {
     "name": "Eugenio Bustamante",
     "url": "https://github.com/eugeniobusta"

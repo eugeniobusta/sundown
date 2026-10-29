@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.1
+
+From a review of 1.2.0 by two independent agents (one hunted bugs, one scored it as the hackathon judge would). Each bug below was reproduced on 1.2.0 before it was fixed.
+
+### Fixed
+- **`git log -U3`, `--unified`, `--binary` and `--patch-with-raw` still ran a program named in the repo's own git config** (a textconv driver), so the 1.1.7 fix for patch-style `git log` was incomplete. The check now works the other way round: a `git log` may only use flags known not to build a diff (`--oneline`, `--graph`, `-5`, `--author=`...); any other flag needs `--no-ext-diff --no-textconv`, so a flag nobody listed can't slip through.
+- **The "only you can change this" message told you to run `sundown config ...` in your own terminal,** where `sundown` doesn't exist (it only lives on Claude Code's PATH). It now prints the full `node ".../bin/sundown" config ...` command, and a test runs that command as printed. The README explains where the plugin folder is.
+- **Setup could switch Sundown on halfway through.** On a day off, `daysOff` was applied in the middle, so the user's next answers were held back by the gate. The setup skill now applies days off and the cutoff last, and tells the user up front that re-running setup on existing settings needs them to run any loosening change themselves (the guard applies at any hour, but the skill said "while it's on").
+- **`config dream maybe` and a bad `dreamInstructions` ended in the word "undefined".** Both now say what a valid value looks like, and a missing hint can never print "undefined".
+- **`sundown config` on a settings file holding `[1]`, `null` or a number said "cutoff = 21:00" but saved nothing.** It now starts a fresh settings object.
+- **`sundown config wrapUpMinutes off` printed `wrapUpMinutes = 0`** while `sundown config` shows `off`. It says `off`.
+- **`sundown dream clear` only looked in the exact current folder,** so from a subfolder it said "No DREAM.md here" and left the file, while the skill went on to say the dream was discarded. It now finds the project's `DREAM.md` (stopping at the project root, your home folder or the top of the disk, never above), and the skill only says "discarded" if the file was deleted.
+
+### Changed
+- README: dropped the unmeasured "two minutes instead of twenty" (it now says what the handoff does for you), and the terminal examples use the command that really works in a plain terminal.
+
+### Left as it is, on purpose
+- `/sundown:dream` is still held back after the cutoff and on days off, like any non-listed command: a dream proposes changes to memory, which is work. Run `/sundown:wake` first if you really want it.
+- A handoff older than 4 days isn't shown in the morning (a long weekend of 4+ days drops a Friday note).
+- Applying a dream is enforced by the skill's instructions and by you approving it, not by code. That is documented.
+
+### Tests
+- 95 tests (was 88).
+
 ## 1.2.0
 
 ### Added

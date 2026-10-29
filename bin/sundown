@@ -82,6 +82,29 @@ function status() {
   console.log(lines.join("\n"));
 }
 
+// The real path of this script, for messages that tell you to run a command in your own terminal
+// (the plain `sundown` command only exists inside Claude Code's shell).
+const SELF = fs.realpathSync(fileURLToPath(import.meta.url));
+
+// Where a dream lives: DREAM.md in this folder, or else in the nearest folder above it that has one,
+// stopping at the project root (a folder with .git), your home folder, or the top of the disk.
+// Claude may have moved into a subfolder of the project, while the dream sits at its root.
+function findDreamFile(start) {
+  // Walk upwards at most 12 folders so this can never run away.
+  let dir = start;
+  for (let i = 0; i < 12; i++) {
+    // The dream, if this folder has one (lstat so a missing file is an error, and a symlink is still seen).
+    const candidate = path.join(dir, DREAM_FILE);
+    try { fs.lstatSync(candidate); return candidate; } catch { /* not here */ }
+    // Stop at the project root, the home folder, or the top of the disk.
+    const parent = path.dirname(dir);
+    if (fs.existsSync(path.join(dir, ".git")) || dir === os.homedir() || parent === dir) break;
+    dir = parent;
+  }
+  // Not found: report against the folder we started in.
+  return path.join(start, DREAM_FILE);
+}
+
 // Settings that make Sundown less strict.
 // Changing one of these while Sundown is on would let Claude end the lock early, so config() guards them.
 const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
@@ -195,7 +218,7 @@ function config() {
   // Refuse only when: this is Claude's shell, the setting is one that can loosen, the value is valid, and this change really would loosen it right now.
   if ("CLAUDECODE" in process.env && LOOSENING.has(key) && isValidSetting(key, value) && loosens(key, value)) {
     // Say what was refused and give the exact command for the person to run in their own terminal.
-    throw new Error(`That would loosen Sundown, so only you can change ${key}. Run \`sundown config ${key} "${raw}"\` in your own terminal.`);
+    throw new Error(`That would loosen Sundown, so only you can change ${key}. Run \`node "${SELF}" config ${key} "${raw}"\` in your own terminal.`);
   }
   // Validate and save. An unknown key or a bad value throws, so nothing invalid is ever written.
   setConfig(key, value); // throws a readable error on a bad key or value
@@ -211,7 +234,7 @@ function config() {
   // Every other setting (or ntfyTopic turned off): just confirm what was saved, showing an empty value as "off".
   } else {
     // Print the confirmation.
-    console.log(`${key} = ${value === "" ? "off" : value}`);
+    console.log(`${key} = ${value === "" || (key === "wrapUpMinutes" && value === 0) ? "off" : value}`);
   }
 }
 
@@ -358,10 +381,10 @@ try {
     case "dream": {
       // Only one subcommand: clear. It deletes DREAM.md in the folder Claude Code is working in, once its proposals were applied or discarded.
       if (args[0] !== "clear") throw new Error("Usage: sundown dream clear");
-      const file = path.join(process.cwd(), DREAM_FILE);
+      const file = findDreamFile(process.cwd());
       // lstat, not stat: never delete through a symlink, and never delete anything that isn't a plain file.
       let st;
-      try { st = fs.lstatSync(file); } catch { console.log("No DREAM.md here."); break; }
+      try { st = fs.lstatSync(file); } catch { console.log("No DREAM.md here, so there is nothing to clear."); break; }
       if (!st.isFile()) throw new Error("DREAM.md here is not a plain file, so it was left alone.");
       // Only delete a file that is really a dream (it starts with the dream header). A DREAM.md someone else wrote, with other content, is theirs and is left alone.
       const fd = fs.openSync(file, "r");

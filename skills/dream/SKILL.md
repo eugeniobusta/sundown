@@ -20,6 +20,6 @@ First read `DREAM.md` in the project root. If it doesn't exist, say "There's no 
 - Keep each memory file's existing format. If you add or remove a memory file, update the memory index (MEMORY.md) too.
 - When done, run `sundown dream clear` to delete DREAM.md, then tell the user in a few short lines what changed and what you skipped.
 
-**`discard`:** run `sundown dream clear`. Say "Dream discarded. Memory is unchanged." Change nothing else.
+**`discard`:** run `sundown dream clear`. If it says "DREAM.md deleted.", say "Dream discarded. Memory is unchanged." If it says there is no DREAM.md or refuses, say exactly that instead and don't claim anything was discarded. Change nothing else.
 
 Don't start any other work.
