@@ -809,16 +809,18 @@ test("cli: install-statusline only mentions a backup when it made one", () => {
 // Protects the lock from being loosened by Claude: while Sundown is active, Claude's shell can't change the settings that would loosen it. The user's terminal and daytime setup still work.
 test("cli: while Sundown is on, Claude can't loosen it; before the cutoff and in your own terminal it can", () => {
   const w = world();
-  // 22:00 is after the cutoff, so Sundown is active.
-  const night = "2026-10-29T22:00:00";
-  // Settings that would make Sundown weaker: a later or off cutoff, a later morning, more days off, a longer override.
-  for (const [key, value] of [["cutoff", "off"], ["morning", "06:00"], ["daysOff", "sat"], ["overrideMinutes", "240"]]) {
-    // Run each as Claude's shell.
+  // 22:00 on a Thursday is after the 21:00 cutoff, so Sundown is active.
+  const night = "2026-10-29T22:00:00"; // Thursday
+  // You (not Claude) make Friday a day off, so tonight's quiet time now lasts until Saturday 08:00.
+  assert.equal(cliAs("you", w, ["config", "daysOff", "fri"]).code, 0); // Friday is off, so the night lasts to Sat 08:00
+  // Each of these would loosen Sundown: switch it off, move the cutoff later, move the morning earlier, remove the day off, lengthen the override.
+  for (const [key, value] of [["cutoff", "off"], ["cutoff", "23:59"], ["morning", "06:00"], ["daysOff", "off"], ["overrideMinutes", "240"]]) {
+    // Try each one from Claude's shell.
     const r = cliAs("claude", w, ["config", key, value], night);
-    // Exit 1: refused.
-    assert.equal(r.code, 1, `${key} should be refused`);
-    // The error says only the user can change it.
+    // Exit code 1 means it was refused.
+    assert.equal(r.code, 1, `${key} ${value} should be refused`);
     assert.match(r.err, /only you can change/);
+    assert.match(r.err, new RegExp(`sundown config ${key} ${value}`)); // tells you the command to run yourself
   }
   // Config on disk is unchanged.
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "21:00");
@@ -1040,4 +1042,74 @@ test("cli: a blank number is rejected instead of being saved as 0", () => {
   assert.equal(cli(w, ["config", "minTurnSeconds", " "]).code, 1);
   // The existing config was not touched: there is still no minTurnSeconds saved.
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).minTurnSeconds, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Setup guard (1.1.4) and the read-only shell allowlist
+// ---------------------------------------------------------------------------
+
+test("setup: finishes even when run in the evening, in either order", () => {
+  // The order the setup skill uses now: morning, days off, then the cutoff last.
+  const a = world({});
+  const evening = "2026-10-29T22:30:00";
+  for (const args of [["morning", "07:00"], ["daysOff", "sat,sun"], ["wrapUpMinutes", "15"], ["cutoff", "21:00"]]) {
+    const r = cliAs("claude", a, ["config", ...args], evening);
+    assert.equal(r.code, 0, `${args.join(" ")}: ${r.err}`);
+  }
+  // Even with the cutoff first (which switches Sundown on), the changes that don't loosen it
+  // still work: this is the reported bug. An EARLIER morning shortens the night, so that one
+  // needs you, and the error says which command to run.
+  const b = world({});
+  for (const args of [["cutoff", "21:00"], ["daysOff", "sat,sun"], ["morning", "09:00"]]) {
+    const r = cliAs("claude", b, ["config", ...args], evening);
+    assert.equal(r.code, 0, `${args.join(" ")}: ${r.err}`);
+  }
+  const early = cliAs("claude", world({}), ["config", "morning", "07:00"], evening);
+  assert.equal(early.code, 0, "no cutoff yet, so Sundown is off and nothing is loosened");
+  const c = world({});
+  cliAs("claude", c, ["config", "cutoff", "21:00"], evening);
+  const refused = cliAs("claude", c, ["config", "morning", "07:00"], evening);
+  assert.equal(refused.code, 1);
+  assert.match(refused.err, /sundown config morning 07:00/);
+  const saved = JSON.parse(fs.readFileSync(path.join(b.state, "config.json"), "utf8"));
+  assert.equal(saved.morning, "09:00");
+  assert.equal(saved.daysOff, "sat,sun");
+});
+
+test("guard: re-running setup at night can lengthen the night but not shorten it", () => {
+  const w = world(); // cutoff 21:00, morning 08:00
+  const night = "2026-10-29T22:30:00";
+  assert.equal(cliAs("claude", w, ["config", "morning", "09:00"], night).code, 0);  // later morning: stricter
+  assert.equal(cliAs("claude", w, ["config", "daysOff", "sat,sun"], night).code, 0); // extra days off: stricter
+  assert.equal(cliAs("claude", w, ["config", "morning", "08:00"], night).code, 1);  // earlier again: loosens
+  assert.equal(cliAs("claude", w, ["config", "morning", "22:31"], night).code, 1);  // the one-minute-night trick
+  assert.equal(cliAs("claude", w, ["config", "overrideMinutes", "10"], night).code, 0); // shorter overrides: stricter
+});
+
+test("guard: an invalid value still gets the normal error, not the guard's", () => {
+  const w = world();
+  const r = cliAs("claude", w, ["config", "cutoff", "25:00"], "2026-10-29T22:30:00");
+  assert.equal(r.code, 1);
+  assert.match(r.err, /not a valid value/);
+});
+
+test("setup skill: applies the cutoff last and says what to do if a change is refused", () => {
+  const skill = fs.readFileSync(path.join(ROOT, "skills", "setup", "SKILL.md"), "utf8");
+  const cutoffCommand = skill.indexOf("sundown config cutoff <HH:MM>");
+  assert.ok(cutoffCommand > skill.indexOf("sundown config morning"), "cutoff command comes after morning");
+  assert.ok(cutoffCommand > skill.indexOf("sundown config daysOff"), "cutoff command comes after daysOff");
+  assert.match(skill, /only you can change/);
+  assert.match(skill, /own terminal/);
+});
+
+test("shutdown shell allowlist: refuses programs that run other programs, allows plain reading", async () => {
+  const { isReadOnlyBash } = await import(script("lib.mjs"));
+  for (const bad of [
+    "rg --pre=sh x .", "rg --pre sh x .", "sort --compress-program=sh f", "git diff --ext-diff",
+    "git log --ext-diff", "git diff --output=out", "find . -exec rm {} +", "find . -delete",
+    "cat a > b", "ls; rm -rf .", "echo hi", "node -e 0", "tail -f log", "grep -r x . | sh",
+  ]) assert.equal(isReadOnlyBash(bad), false, bad);
+  for (const good of ["cat README.md", "ls -la", "git status", "git log --oneline", "grep -rn -e TODO -e FIXME .", "find . -name x -type f | head"]) {
+    assert.equal(isReadOnlyBash(good), true, good);
+  }
 });

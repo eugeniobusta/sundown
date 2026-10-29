@@ -31,6 +31,8 @@ import { fileURLToPath } from "node:url";
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
   nextCutoffAfter, reasonText, dayAndTime, DEFAULTS,
+  // Used to check a value is allowed before deciding whether it would loosen Sundown.
+  isValidSetting,
 } from "../scripts/lib.mjs";
 // Builds the evening report text.
 import { buildReport } from "../scripts/report.mjs";
@@ -80,6 +82,24 @@ function status() {
 // Changing one of these while Sundown is on would let Claude end the lock early, so config() guards them.
 const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
 
+// Would this change make Sundown less strict than it is right now? Only meaningful while
+// Sundown is on. It does if it would switch Sundown off now, end the quiet period sooner
+// (an earlier morning, or removing a day off), or lengthen what one "override:" allows.
+// Anything that keeps or tightens it (a later morning, an extra day off) is fine, which is
+// what lets /sundown:setup finish even after it has just switched Sundown on.
+function loosens(key, value) {
+  // How Sundown stands right now (why it is on, and until when).
+  const current = sundownState(date, cfg);
+  // Sundown is off, so there is nothing to loosen: any change is fine (this is how setup works by day).
+  if (!current.why) return false;
+  // A longer override means a longer pass through the gate, which is looser; a shorter one is not.
+  if (key === "overrideMinutes") return value > cfg.overrideMinutes;
+  // Work out how Sundown would stand with the new value, without saving anything.
+  const after = sundownState(date, { ...cfg, [key]: value });
+  // Looser if it would no longer be on at all, or would end earlier than it does now.
+  return !after.why || after.until < current.until;
+}
+
 // A number, or the original text if it isn't one (so the error shows what you typed).
 // Parse a numeric setting. Number() gives NaN for text like "abc"; return that text unchanged so the validation error in setConfig can show what the user typed.
 // A blank value is not a number either (Number(" ") is 0), so it is also returned as typed and rejected.
@@ -99,13 +119,6 @@ function config() {
   if (raw === "") {
     // Throwing lands in the catch at the bottom, which prints the message and exits 1.
     throw new Error(`Give ${key} a value. (cutoff, daysOff, ntfyTopic and wrapUpMinutes also accept "off".)`);
-  }
-  // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
-  // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
-  // CLAUDECODE is set only in Claude's shell, so this blocks Claude, not you. Only the settings in LOOSENING are blocked, and only while Sundown is on.
-  if ("CLAUDECODE" in process.env && LOOSENING.has(key) && sundownState(date, cfg).why) {
-    // Refuse with a message that tells the human what to do instead.
-    throw new Error(`Sundown is on, so only you can change ${key}. Run this in your own terminal, or wait until it's off.`);
   }
   // Pointing pushes at another server would send them (maybe with your folder name) there,
   // so only you may do that, at any time of day.
@@ -130,6 +143,14 @@ function config() {
   if (key === "minTurnSeconds" || key === "overrideMinutes") value = num(raw);
   // "off" means 0, which turns the wrap-up note off. Anything else is parsed as a number.
   if (key === "wrapUpMinutes") value = raw === "off" ? 0 : num(raw);
+  // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
+  // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
+  // (An invalid value falls through to setConfig below, which explains what is wrong with it.)
+  // Refuse only when: this is Claude's shell, the setting is one that can loosen, the value is valid, and this change really would loosen it right now.
+  if ("CLAUDECODE" in process.env && LOOSENING.has(key) && isValidSetting(key, value) && loosens(key, value)) {
+    // Say what was refused and give the exact command for the person to run in their own terminal.
+    throw new Error(`Sundown is on, and that would loosen it, so only you can change ${key}. Run \`sundown config ${key} ${raw}\` in your own terminal, or wait until it's off.`);
+  }
   // Validate and save. An unknown key or a bad value throws, so nothing invalid is ever written.
   setConfig(key, value); // throws a readable error on a bad key or value
   // A push topic was just set (not turned off): show the user what to subscribe to.
