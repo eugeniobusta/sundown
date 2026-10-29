@@ -20,6 +20,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Used to make a short anonymous fingerprint of a project folder (see projectKey).
+import crypto from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -44,6 +46,17 @@ export const DEFAULTS = Object.freeze({
 
 // The file a dream is written to: in the project root, next to TOMORROW.md.
 export const DREAM_FILE = "DREAM.md";
+
+// Every real dream starts with this text, so a file that merely shares the name is not mistaken for one.
+export const DREAM_HEADER = "# Dream:";
+
+// A short anonymous fingerprint of a project folder (the first 12 hex characters of its SHA-256).
+// The event log stores this instead of the folder path, so it can say "a dream was written for
+// THIS project" without recording where the project is.
+export function projectKey(dir) {
+  // Hash the folder path and keep only the start of the digest.
+  return crypto.createHash("sha256").update(String(dir)).digest("hex").slice(0, 12);
+}
 
 // Day names as used in daysOff, indexed like Date.getDay() (0 = Sunday).
 // Order matters: getDay() returns 0 for Sunday, so DAY_NAMES[date.getDay()] is the name.
@@ -86,9 +99,9 @@ const VALID = {
   wrapUpMinutes: (v) => Number.isInteger(v) && v >= 0 && v <= 120,
   // Only the two documented modes.
   dream: (v) => v === "on" || v === "off",
-  // Plain one-line text of at most 1000 characters. Control characters (newlines included) are refused,
-  // so the text can't break out of the one line it is quoted on when it is handed to Claude.
-  dreamInstructions: (v) => typeof v === "string" && v.length <= 1000 && !/[\u0000-\u001f\u007f]/.test(v),
+  // Plain one-line text of at most 1000 characters. Control characters (newlines included), the Unicode line
+  // separators, double quotes and backslashes are refused, so the text can't break out of the one quoted line it is handed to Claude on.
+  dreamInstructions: (v) => typeof v === "string" && v.length <= 1000 && !/[\u0000-\u001f\u007f\u0085\u2028\u2029"\\]/.test(v),
 };
 
 // True only for known keys. hasOwnProperty stops names like "constructor" or

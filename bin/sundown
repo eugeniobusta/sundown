@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 // Shared logic lives in lib.mjs so the hooks and this command agree on the rules.
 import {
   readConfig, setConfig, now, sundownState, lockOn, wake, logEvent, hhmm,
-  nextCutoffAfter, reasonText, dayAndTime, DEFAULTS, DREAM_FILE,
+  nextCutoffAfter, reasonText, dayAndTime, DEFAULTS, DREAM_FILE, DREAM_HEADER,
   // Minutes after midnight for "HH:MM"; used to compare cutoffs and mornings.
   toMinutes,
   // Used to check a value is allowed before deciding whether it would loosen Sundown.
@@ -363,6 +363,16 @@ try {
       let st;
       try { st = fs.lstatSync(file); } catch { console.log("No DREAM.md here."); break; }
       if (!st.isFile()) throw new Error("DREAM.md here is not a plain file, so it was left alone.");
+      // Only delete a file that is really a dream (it starts with the dream header). A DREAM.md someone else wrote, with other content, is theirs and is left alone.
+      const fd = fs.openSync(file, "r");
+      // A small buffer for the first bytes.
+      const head = Buffer.alloc(200);
+      // Read them and keep only what was read.
+      const start = head.subarray(0, fs.readSync(fd, head, 0, 200, 0)).toString("utf8");
+      // Always close the file.
+      fs.closeSync(fd);
+      // Refuse, and say why, if it doesn't look like a dream.
+      if (!start.startsWith(DREAM_HEADER)) throw new Error(`DREAM.md here doesn't start with "${DREAM_HEADER}", so it isn't a Sundown dream and was left alone.`);
       fs.unlinkSync(file);
       console.log("DREAM.md deleted.");
       break;

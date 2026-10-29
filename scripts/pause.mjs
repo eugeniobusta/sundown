@@ -27,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 // Hook input, time, lock and pass state, the project folder, the event log, the time formatter and the read-only shell check all come from lib.mjs, shared with the other hooks.
 import {
-  readHookInput, readConfig, now, lockState, hasPass, projectDir, logEvent, dayAndTime, isReadOnlyBash, DREAM_FILE,
+  readHookInput, readConfig, now, lockState, hasPass, projectDir, logEvent, dayAndTime, isReadOnlyBash, DREAM_FILE, projectKey,
 } from "./lib.mjs";
 
 // Tools that only look at files. Allowed during the lock so Claude can write an
@@ -74,20 +74,10 @@ try {
   // The file the tool wants to touch, or "" if there isn't one.
   const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
   // A TOMORROW.md or DREAM.md that is itself a symlink could point anywhere: don't write through it.
-  // True when the file at `file` is a symlink. lstat looks at the file itself without following it; a missing file throws, which means "not a link".
-  const isLink = (file) => { try { return fs.lstatSync(file).isSymbolicLink(); } catch { return false; } };
+  // True when writing to `file` could land somewhere else: it is a symlink (lstat looks at the file itself without following it), or a hard link shared with another name (nlink above 1, so writing in place would change that other file too). A missing file throws, which means "fine".
+  const isLink = (file) => { try { const st = fs.lstatSync(file); return st.isSymbolicLink() || st.nlink > 1; } catch { return false; } };
   // The file this tool wants to write, resolved against the project folder so relative paths work.
   const target = filePath ? path.resolve(projectDir(input), filePath) : "";
-  // Allow only if: the tool is a writing tool, a path was given, and that path is the handoff or (dreaming on) the dream, neither being a symlink.
-  if (HANDOFF_TOOLS.has(tool) && target) {
-    // The dream file lives next to the handoff, and is only writable while the setting is on.
-    const dream = path.join(projectDir(input), DREAM_FILE);
-    if ((samePath(target, handoff) && !isLink(handoff)) ||
-        (readConfig().dream === "on" && samePath(target, dream) && !isLink(dream))) {
-      // Exit 0 = allow: this is Claude writing the handoff or the dream.
-      process.exit(0);
-    }
-  }
   // Has the handoff already been written since the lock was set? Assume no until the file's time proves it.
   let handoffWritten = false;
   // Try to read when TOMORROW.md was last modified. If the file doesn't exist this throws and the answer stays false.
@@ -118,6 +108,19 @@ try {
     process.exit(0);
   }
 
+  // Not stopped yet, so the handoff and the dream may still be written. (This comes AFTER the stop above: once the handoff exists nothing else is allowed, so an agent can't keep rewriting files after it has been told to stop.)
+  // Allow only if: the tool is a writing tool, a path was given, and that path is the handoff or (dreaming on) the dream, neither being a symlink.
+  if (HANDOFF_TOOLS.has(tool) && target) {
+    // The dream file lives next to the handoff, and is only writable while the setting is on.
+    const dream = path.join(projectDir(input), DREAM_FILE);
+    if ((samePath(target, handoff) && !isLink(handoff)) ||
+        (readConfig().dream === "on" && samePath(target, dream) && !isLink(dream))) {
+      // Remember, without the folder path, that Sundown let a dream be written for this project. The morning greeting only announces a DREAM.md it can match to this record, so a file from a cloned repo is never presented as last night's dream.
+      if (samePath(target, dream)) logEvent("dream-writing", { project: projectKey(projectDir(input)) });
+      // Exit 0 = allow: this is Claude writing the handoff or the dream.
+      process.exit(0);
+    }
+  }
   // The handoff is not written yet, so reading is still fine: Claude needs to look around to write it.
   // Exit 0 = allow: reading files cannot change anything.
   if (READ_ONLY.has(tool)) process.exit(0);

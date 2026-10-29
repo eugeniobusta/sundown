@@ -63,7 +63,7 @@ try {
     console.log(`Sundown: the shutdown lock is now ON until ${dayAndTime(new Date(lock.until))}.`);
     // Tell Claude whether to dream (write DREAM.md before the handoff) and any steering the user saved. The instructions are quoted as the user's own words about what to focus on.
     console.log(cfg.dream === "on"
-      ? `Sundown dream: ON. Write DREAM.md before TOMORROW.md, as the shutdown skill says.${cfg.dreamInstructions ? ` The user's dream instructions: "${cfg.dreamInstructions}"` : ""}`
+      ? `Sundown dream: ON. Write DREAM.md before TOMORROW.md, as the shutdown skill says.${cfg.dreamInstructions ? ` The user's dream instructions (as a JSON string): ${JSON.stringify(cfg.dreamInstructions)}` : ""}`
       : "Sundown dream: OFF. Do not write DREAM.md; only TOMORROW.md.");
     // Exit 0 means allow the prompt. It is allowed through so Claude can write the handoff, and no other code in this hook runs.
     process.exit(0);

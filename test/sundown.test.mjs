@@ -1468,8 +1468,12 @@ test("dream: with dream off, or with DREAM.md a symlink, the write is denied", (
 
 // Protects the morning: the dream is announced, never pasted in or applied, and it shows even without a handoff.
 test("dream: the morning points at DREAM.md without pasting it into the session", () => {
-  const w = world();
-  fs.writeFileSync(path.join(w.project, "DREAM.md"), "# Dream\nSECRET-DREAM-CONTENT\n");
+  // The dream is on, and the shutdown lock lets the pause hook log that DREAM.md was really written here.
+  const w = world({ cutoff: "21:00", morning: "08:00", dream: "on" });
+  hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: path.join(w.project, "DREAM.md") } }, "2026-10-29T18:01:00");
+  // The file starts with the header the shutdown skill writes.
+  fs.writeFileSync(path.join(w.project, "DREAM.md"), "# Dream: tidy\nSECRET-DREAM-CONTENT\n");
   // Dream only, no handoff.
   let r = hook(w, "morning.mjs", { source: "startup" }, "2026-10-30T08:30:00");
   assert.match(JSON.parse(r.out).systemMessage, /dream is in DREAM\.md/);
@@ -1492,7 +1496,12 @@ test("dream: `sundown dream clear` deletes only a plain DREAM.md in the current 
   const w = world();
   const run = (args) => spawnSync("node", [BIN, ...args], { cwd: w.project, encoding: "utf8", env: { ...process.env, SUNDOWN_DIR: w.state, CLAUDE_CONFIG_DIR: w.claude } });
   assert.match(run(["dream", "clear"]).stdout, /No DREAM\.md here/);
+  // A file without the header is not ours, so it is refused and kept.
   fs.writeFileSync(path.join(w.project, "DREAM.md"), "x");
+  assert.notEqual(run(["dream", "clear"]).status, 0);
+  assert.ok(fs.existsSync(path.join(w.project, "DREAM.md")));
+  // With the header it is deleted.
+  fs.writeFileSync(path.join(w.project, "DREAM.md"), "# Dream: x\n");
   assert.match(run(["dream", "clear"]).stdout, /deleted/);
   assert.ok(!fs.existsSync(path.join(w.project, "DREAM.md")));
   // A folder named DREAM.md is refused, and so is an unknown subcommand.
@@ -1520,4 +1529,40 @@ test("dream: a default install neither asks for a dream nor allows writing DREAM
   assert.match(hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00").out, /Sundown dream: OFF/);
   // And writing DREAM.md during the lock is refused, like any other file except the handoff.
   assert.match(hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: path.join(w.project, "DREAM.md") } }, "2026-10-29T18:01:00").out, /deny/);
+});
+
+// Protects the morning from planted files: no provenance event or no header means no announcement.
+test("dream: a DREAM.md nobody wrote through Sundown is not announced", () => {
+  // Dream on, but no shutdown ever wrote the file.
+  const w = world({ cutoff: "21:00", morning: "08:00", dream: "on" });
+  fs.writeFileSync(path.join(w.project, "DREAM.md"), "# Dream: planted\n");
+  assert.ok(!hook(w, "morning.mjs", { source: "startup" }, "2026-10-30T08:30:00").out.includes("DREAM.md"));
+});
+
+// Protects the stop: once the handoff exists, even a DREAM.md write halts the agent.
+test("dream: after the handoff is written, a DREAM.md write stops the agent", () => {
+  const w = world({ cutoff: "21:00", morning: "08:00", dream: "on" });
+  hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  fs.writeFileSync(path.join(w.project, "TOMORROW.md"), "Stopped at: x\nFirst step tomorrow: y\nOpen question: none\n");
+  const r = hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: path.join(w.project, "DREAM.md") } }, "2026-10-29T18:02:00");
+  assert.match(r.out, /"continue":\s*false/);
+});
+
+// Protects against hardlinks: a second name for a file could be overwritten in place, so both targets are refused.
+test("dream: a hardlinked DREAM.md or TOMORROW.md is denied", () => {
+  const w = world({ cutoff: "21:00", morning: "08:00", dream: "on" });
+  hook(w, "gate.mjs", { prompt: "/sundown:shutdown" }, "2026-10-29T18:00:00");
+  for (const name of ["DREAM.md", "TOMORROW.md"]) {
+    // The target file exists elsewhere and is linked into the project.
+    const other = path.join(w.state, "other-" + name);
+    fs.writeFileSync(other, "x");
+    fs.linkSync(other, path.join(w.project, name));
+    assert.match(hook(w, "pause.mjs", { tool_name: "Write", tool_input: { file_path: path.join(w.project, name) } }, "2026-10-29T18:01:00").out, /deny/);
+  }
+});
+
+// Protects the quoted instruction line: quotes, backslashes and unicode line breaks are rejected.
+test("dream: dreamInstructions cannot contain a quote, backslash or U+2028", async () => {
+  const { isValidSetting } = await import(script("lib.mjs"));
+  for (const bad of ['say "hi"', "a\\b", "a\u2028b"]) assert.equal(isValidSetting("dreamInstructions", bad), false);
 });

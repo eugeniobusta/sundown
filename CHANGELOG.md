@@ -9,12 +9,19 @@
 - **`sundown dream clear`** deletes a plain `DREAM.md` in the current folder.
 - A `dream` entry in the event log when a waiting dream is shown in the morning (no content).
 
+### Security (found by an adversarial review of the dream, fixed before release)
+- **`/sundown:dream apply` is limited** to `CLAUDE.md` in the project root and files in Claude's memory folder; it lists the exact paths first and skips anything else, even if `DREAM.md` claims urgency. It refuses a file that doesn't start with `# Dream:`.
+- **The morning only announces a dream Sundown saw being written** (a logged `dream-writing` event for that project, a `# Dream:` first line, under 4 days old), so a `DREAM.md` from a cloned repo is never announced. `sundown dream clear` deletes only a file with that header.
+- **A `DREAM.md` write after the handoff now stops the agent** (the stop check runs before the allowlist).
+- **Hardlinked `DREAM.md` / `TOMORROW.md` are denied**, like symlinks.
+- **`dreamInstructions` can't contain quotes, backslashes or unicode line breaks**, and is passed to Claude JSON-quoted.
+
 ### Changed
 - The shutdown skill now has a dream step before the handoff. The handoff still comes last, because writing it ends the session. If the dream is skipped, nothing else changes: the handoff still stops the agent.
 - **Opt-in.** The dream is off by default, so existing installs and fresh installs behave exactly as before: no extra step at shutdown and nothing waiting in the morning. Turn it on with `sundown config dream on`. If you do, consider adding `DREAM.md` to `.gitignore`, because it can quote your memory notes.
 
 ### Tests
-- 73 tests (was 65).
+- 88 tests (was 75).
 
 ## 1.1.7
 

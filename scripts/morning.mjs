@@ -20,7 +20,7 @@ import path from "node:path";
 // Hook input, settings, time, lock helpers, state, project folder, event log, reason text and the once-only welcome note all come from lib.mjs.
 import {
   readHookInput, readConfig, now, lockState, lockOff, sundownState,
-  projectDir, logEvent, reasonText, claimWelcome, DREAM_FILE,
+  projectDir, logEvent, reasonText, claimWelcome, DREAM_FILE, DREAM_HEADER, projectKey, readEvents,
 } from "./lib.mjs";
 
 // A handoff older than this many days is considered stale and is not shown.
@@ -70,12 +70,29 @@ try {
     process.exit(0);
   }
 
-  // Is there a recent dream waiting? Same rules as the handoff: a plain file (never a symlink), under MAX_AGE_DAYS old.
+  // Is there a recent dream waiting? Same rules as the handoff (a plain file, never a symlink, under MAX_AGE_DAYS old), and two more so that a file which merely has the name is never presented as last night's dream: it must start with the dream header, and Sundown's own hook must have allowed a dream to be written for this project recently.
   let dreamWaiting = false;
   try {
+    // The dream file in the project root.
+    const dreamPath = path.join(projectDir(input), DREAM_FILE);
     // lstat, not stat, so a symlink is seen as a symlink.
-    const d = fs.lstatSync(path.join(projectDir(input), DREAM_FILE));
-    dreamWaiting = d.isFile() && !d.isSymbolicLink() && date - d.mtime <= MAX_AGE_DAYS * 86400000;
+    const d = fs.lstatSync(dreamPath);
+    // A plain file, not a link, and recent.
+    const plainAndRecent = d.isFile() && !d.isSymbolicLink() && date - d.mtime <= MAX_AGE_DAYS * 86400000;
+    // Read only the first 200 bytes: enough to see the header, and never the whole (possibly huge) file.
+    const fd = fs.openSync(dreamPath, "r");
+    // A small buffer for the start of the file.
+    const head = Buffer.alloc(200);
+    // Fill it and keep only the bytes actually read.
+    const text = head.subarray(0, fs.readSync(fd, head, 0, 200, 0)).toString("utf8");
+    // Always close the file.
+    fs.closeSync(fd);
+    // The key of this project, matched against the log written when the dream was allowed.
+    const key = projectKey(projectDir(input));
+    // True if a "dream-writing" record for this project exists from the last MAX_AGE_DAYS days.
+    const wasAllowed = readEvents().some((e) => e.type === "dream-writing" && e.project === key && date - new Date(e.t) <= MAX_AGE_DAYS * 86400000);
+    // All three must hold.
+    dreamWaiting = plainAndRecent && text.startsWith(DREAM_HEADER) && wasAllowed;
   } catch { /* no dream */ }
   // One line for you and for Claude. It only points at the file; the content stays out of the session.
   const dreamLine = `☾ Last night's dream is in ${DREAM_FILE}: proposed memory changes, nothing applied yet. Read it, then /sundown:dream apply or /sundown:dream discard.`;
