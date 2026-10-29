@@ -37,7 +37,7 @@ export const DEFAULTS = Object.freeze({
   minTurnSeconds: 60,       // only push "Claude finished" after turns at least this long
   overrideMinutes: 20,      // how long one "override:" lets that session work
   daysOff: "",              // whole days Sundown keeps quiet, e.g. "sat,sun". "" = none
-  wrapUpMinutes: 30,        // one gentle "time to wrap up" note this long before the cutoff. 0 = off
+  wrapUpMinutes: 0,         // optional: one gentle "time to wrap up" note this many minutes before the cutoff. 0 = off (no alerts by default)
 });
 
 // Day names as used in daysOff, indexed like Date.getDay() (0 = Sunday).

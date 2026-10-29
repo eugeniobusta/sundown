@@ -27,7 +27,7 @@ Sundown builds the end of the day into Claude Code:
 
 - **After your cutoff, new prompts are held back.** You can still send one with `override:`, and every override shows up in your report.
 - **`/sundown:shutdown` ends the day.** Any agent still running is stopped at its next tool call (that call is refused too) after it writes a three-line handoff to `TOMORROW.md`.
-- **Half an hour before your cutoff,** one short note says it's a good moment to land the task. Claude is told the same thing, so it doesn't start anything big. Once a day, never more.
+- **A heads-up before your cutoff** (optional, off by default). With `sundown config wrapUpMinutes 30`, one short note says half an hour before your cutoff that it's a good moment to land the task. Claude is told the same thing, so it doesn't start anything big. Once a day, never more.
 - **Days off stay off** (optional). Choose days such as `sat,sun` and Sundown keeps them quiet from morning to morning.
 - **The next morning,** your first session opens with that handoff, so you start in two minutes instead of twenty.
 - **You can leave the desk while an agent runs** (optional). Instead of watching the terminal, you get one phone push when Claude needs you or finishes a long task. It's off by default, and short turns never send anything.
@@ -64,7 +64,7 @@ SUNDOWN_NOW=2026-10-29T22:00:00 claude
 4. "Next morning": `SUNDOWN_NOW=2026-10-30T08:30:00 claude`. The session opens with *"☀ Good morning. Last time you stopped here: …"*
 5. Run `/sundown:report` to see the override and the held-back message.
 
-To see the wrap-up note instead, start at `SUNDOWN_NOW=2026-10-29T20:40:00` and send any message.
+To see the optional wrap-up note instead, run `sundown config wrapUpMinutes 30`, start at `SUNDOWN_NOW=2026-10-29T20:40:00` and send any message.
 
 ## Commands
 
@@ -86,7 +86,7 @@ Settings (`sundown config <key> <value>`, or ask `/sundown:setup`):
 | `cutoff` | off | When your evening starts, e.g. `21:00`. `off` = only `/sundown:shutdown` ends the day. |
 | `morning` | `08:00` | When the day starts again. |
 | `daysOff` | none | Whole days kept quiet, e.g. `sat,sun`. `off` = none. A day off runs from that morning to the next, so with `fri,sat` Thursday evening locks at your cutoff and unlocks on Sunday morning. |
-| `wrapUpMinutes` | `30` | The one "time to wrap up" note, this long before the cutoff. `off` = no note. |
+| `wrapUpMinutes` | `off` | Optional: one "time to wrap up" note this many minutes before the cutoff, e.g. `30`. Off by default, so a fresh install shows you no alerts. |
 | `overrideMinutes` | `20` | How long one `override:` lets that session keep working. |
 | `ntfyTopic` | off | Phone pushes. `generate` makes a private topic. |
 | `pushDetail` | `none` | `folder` adds the project folder name to pushes. |
@@ -106,7 +106,7 @@ Sundown is four small hook scripts, plus a shared library and a report builder, 
 
 `scripts/lib.mjs` holds the shared logic (settings, time, lock, state files), `scripts/report.mjs` builds the report, and `bin/sundown` is the command-line tool the skills call.
 
-Shutdown and wake are handled by the hook that only runs on messages a person typed. Inside Claude's own shell (Claude Code marks it with `CLAUDECODE=1`), the command-line `sundown wake` and `sundown shutdown` refuse to run, and so does any change to `cutoff`, `morning`, `daysOff` or `overrideMinutes` that would loosen Sundown while it's on: switch it off, end tonight sooner, make every later evening looser (a later or removed cutoff, an earlier morning, fewer days off), or lengthen an override. So Claude can't switch Sundown off at 22:00 to keep working, tonight or tomorrow. Changes that keep or tighten it still work, so `/sundown:setup` can finish even when you run it in the evening; if Sundown is already on, your own answers to its questions need to start with `override:`.
+Shutdown and wake are handled by the hook that only runs on messages a person typed. Inside Claude's own shell (Claude Code marks it with `CLAUDECODE=1`), the command-line `sundown wake` and `sundown shutdown` refuse to run, and so does any change to `cutoff`, `morning`, `daysOff` or `overrideMinutes` that would loosen Sundown, at any hour: a later or removed cutoff, an earlier morning, fewer days off, a longer override, or (while it's on) anything that ends tonight sooner. So Claude can't switch Sundown off to keep working, tonight or tomorrow. Changes that keep or tighten it still work (a first cutoff, an earlier cutoff, a later morning, an extra day off), so `/sundown:setup` can finish at any hour, and a command it can't run is handed to you to run yourself; if Sundown is already on, your own answers to its questions need to start with `override:`.
 
 ## Privacy
 
@@ -133,7 +133,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 - **A running agent stops at its next tool call.** That call is refused, and the run is stopped. A single long command that has already started (a ten-minute build) runs to the end.
 - **The handoff goes in the folder Claude Code reports as its current directory** (it follows `cd`). `TOMORROW.md` is looked for there, not in a parent folder.
 - **One cutoff for every working day.** Days off can be whole days, but there's no separate cutoff per weekday yet.
-- **Claude can't switch Sundown off by accident, but it isn't sandboxed.** The `CLAUDECODE` check stops `sundown wake`, `sundown shutdown` and loosening settings while Sundown is on. Something deliberately written to get around it (clearing that variable, or editing `~/.sundown` directly) could. While Sundown is off, Claude can change settings, because that's how `/sundown:setup` works. It's a commitment device for you, not a security boundary against Claude.
+- **Claude can't switch Sundown off by accident, but it isn't sandboxed.** The `CLAUDECODE` check stops `sundown wake`, `sundown shutdown`, loosening the schedule and repointing pushes (`ntfyServer`). Something deliberately written to get around it (clearing that variable, or editing `~/.sundown` directly) could. It's a commitment device for you, not a security boundary against Claude.
 - **The report counts prompts, not hours.** It's a picture of when you were working, not a timesheet.
 - `pause.mjs` starts Node on every tool call, which adds roughly 50 ms per call on a laptop (measured: 48 ms against 39 ms for an empty Node start).
 - The status line points at the installed copy of the plugin. Run `sundown install-statusline` again after updating Sundown.
@@ -141,7 +141,7 @@ Shutdown and wake are handled by the hook that only runs on messages a person ty
 ## Development
 
 ```
-node --test test/*.test.mjs        # 60 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
+node --test test/*.test.mjs        # 63 tests, no dependencies (also run by CI on Linux and macOS, Node 18/20/22)
 claude --plugin-dir .              # try the plugin without installing it
 claude plugin validate --strict .
 ```

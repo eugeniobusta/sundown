@@ -15,7 +15,7 @@ Order matters: ask the questions in the order below, but apply the cutoff **last
 
 1. **Evening cutoff.** Ask what time they want to stop working in the evening (24-hour, e.g. 21:00; it applies every day), or "none" to only use /sundown:shutdown by hand. Remember the answer; you'll apply it in step 6.
 2. **Morning.** Ask when their day starts (default 08:00). Run `sundown config morning <HH:MM>`.
-3. **Days off (optional).** Ask if there are whole days Sundown should keep quiet, for example the weekend. If yes, run `sundown config daysOff <days>` with three-letter names separated by commas (e.g. `sat,sun`). Mention that 30 minutes before the cutoff they'll get one short "time to wrap up" note; if they'd rather not, run `sundown config wrapUpMinutes off`.
+3. **Days off (optional).** Ask if there are whole days Sundown should keep quiet, for example the weekend. If yes, run `sundown config daysOff <days>` with three-letter names separated by commas (e.g. `sat,sun`). Then offer, as an option and not as a default, a one-line heads-up shortly before the cutoff ("time to wrap up", once a day). Only if they want it, run `sundown config wrapUpMinutes 30` (or the number of minutes they choose).
 4. **Phone notifications (optional).** Explain in one sentence: when Claude finishes a long task or needs an answer, their phone buzzes, so they can leave the desk instead of watching the terminal. It uses ntfy.sh (free, no account; the app is "ntfy" on iOS and Android). If they want it:
    - run `sundown config ntfyTopic generate` and show them the topic it prints;
    - tell them to open the ntfy app, tap +, and subscribe to exactly that topic. The topic works like a password, so they shouldn't share it;

@@ -84,31 +84,31 @@ function status() {
 // Changing one of these while Sundown is on would let Claude end the lock early, so config() guards them.
 const LOOSENING = new Set(["cutoff", "morning", "daysOff", "overrideMinutes"]);
 
-// Would this change make Sundown less strict? Only meaningful while Sundown is on.
-// Two things count as looser: (1) a change that would end tonight sooner or switch Sundown
-// off right now, or lengthen what one "override:" allows; and (2) a change that makes the
-// WHOLE schedule looser (a later or removed cutoff, an earlier morning, fewer days off),
-// even if tonight stays the same, because otherwise Claude could quietly switch off
-// tomorrow's evening while tonight's lock is on. Anything that keeps or tightens the
-// schedule (a later morning, an earlier cutoff, an extra day off) is fine, which is what
-// lets /sundown:setup finish even after it has just switched Sundown on.
+// Would this change make Sundown less strict? Two things count as looser: (1) a change that
+// would end tonight sooner or switch Sundown off right now (only while it is on), and (2) a
+// change that makes the WHOLE schedule looser: a later or removed cutoff, an earlier morning,
+// fewer days off, a longer override. Rule 2 applies at any hour, so Claude can't quietly
+// switch off tomorrow's evening in the afternoon either. Anything that keeps or tightens the
+// schedule (setting a first cutoff, an earlier cutoff, a later morning, an extra day off) is
+// fine, which is what lets /sundown:setup finish at any time of day.
 function loosens(key, value) {
-  // How Sundown stands right now (why it is on, and until when).
-  const current = sundownState(date, cfg);
-  // Sundown is off, so there is nothing to loosen: any change is fine (this is how setup works by day).
-  if (!current.why) return false;
-  // A longer override means a longer pass through the gate, which is looser; a shorter one is not.
+  // A longer override is a longer pass through the gate, which is looser; a shorter one is not.
   if (key === "overrideMinutes") return value > cfg.overrideMinutes;
-  // Work out how Sundown would stand with the new value, without saving anything.
-  const after = sundownState(date, { ...cfg, [key]: value });
-  // Looser tonight if it would no longer be on at all, or would end earlier than it does now.
-  if (!after.why || after.until < current.until) return true;
-  // Otherwise tonight is the same, so check whether the schedule from tomorrow on gets looser.
-  return loosensSchedule(key, value);
+  // How Sundown stands right now (why it is on, and until when; why is null when it is off).
+  const current = sundownState(date, cfg);
+  // While Sundown is on, also refuse changes that would end tonight sooner.
+  if (current.why) {
+    // Work out how Sundown would stand with the new value, without saving anything.
+    const after = sundownState(date, { ...cfg, [key]: value });
+    // Looser tonight if it would no longer be on at all, or would end earlier than it does now.
+    if (!after.why || after.until < current.until) return true;
+  }
+  // Whether or not it is on, check whether the schedule from tomorrow on gets looser.
+  return loosensSchedule(key, value, Boolean(current.why));
 }
 
 // Does this change make the regular schedule (every evening and day off) looser?
-function loosensSchedule(key, value) {
+function loosensSchedule(key, value, isOn) {
   // How many minutes after the morning time an evening starts, so cutoffs can be compared
   // even when they cross midnight. A cutoff equal to the morning means "never quiet", the
   // loosest of all, so 0 is counted as a full day (1440 minutes).
@@ -124,8 +124,8 @@ function loosensSchedule(key, value) {
   }
   // The morning is looser if it makes the quiet period (cutoff to morning) shorter.
   if (key === "morning") {
-    // With no cutoff there is no quiet period to measure, so just compare the clock times: earlier ends the lock sooner.
-    if (cfg.cutoff === "") return toMinutes(value) < toMinutes(cfg.morning);
+    // With no cutoff there is no regular quiet period, so a morning only matters while a lock or day off is running: then an earlier one ends it sooner.
+    if (cfg.cutoff === "") return isOn && toMinutes(value) < toMinutes(cfg.morning);
     // Length of the quiet period in minutes for a given morning, counted from the cutoff (wraps past midnight).
     const quiet = (morning) => (toMinutes(morning) - toMinutes(cfg.cutoff) + 1440) % 1440;
     // Shorter quiet period = looser.
@@ -187,13 +187,13 @@ function config() {
   if (key === "minTurnSeconds" || key === "overrideMinutes") value = num(raw);
   // "off" means 0, which turns the wrap-up note off. Anything else is parsed as a number.
   if (key === "wrapUpMinutes") value = raw === "off" ? 0 : num(raw);
-  // While Sundown is on, only a person may loosen it. Claude Code sets CLAUDECODE=1 in the
-  // shell it gives Claude, so Claude can't run "config cutoff off" at 22:00 to get around the gate.
+  // Only a person may loosen Sundown. Claude Code sets CLAUDECODE=1 in the
+  // shell it gives Claude, so Claude can't run "config cutoff off" to get around the gate.
   // (An invalid value falls through to setConfig below, which explains what is wrong with it.)
   // Refuse only when: this is Claude's shell, the setting is one that can loosen, the value is valid, and this change really would loosen it right now.
   if ("CLAUDECODE" in process.env && LOOSENING.has(key) && isValidSetting(key, value) && loosens(key, value)) {
     // Say what was refused and give the exact command for the person to run in their own terminal.
-    throw new Error(`Sundown is on, and that would loosen it, so only you can change ${key}. Run \`sundown config ${key} ${raw}\` in your own terminal, or wait until it's off.`);
+    throw new Error(`That would loosen Sundown, so only you can change ${key}. Run \`sundown config ${key} ${raw}\` in your own terminal, `);
   }
   // Validate and save. An unknown key or a bad value throws, so nothing invalid is ever written.
   setConfig(key, value); // throws a readable error on a bad key or value

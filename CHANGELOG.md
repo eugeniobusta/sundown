@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.6
+
+### Changed
+- **No alerts by default.** The "time to wrap up" note is now opt-in (`sundown config wrapUpMinutes 30`); a fresh install shows nothing of the kind. Phone pushes were already opt-in. `/sundown:setup` offers the note as an option.
+- **Claude can't loosen your schedule at any hour.** The guard used to apply only while Sundown was on, so in the afternoon Claude could still move the cutoff later or remove it. Now a later or removed cutoff, an earlier morning, fewer days off and a longer override are refused at any time (a first cutoff, an earlier cutoff, a later morning and extra days off are still fine, so first-time setup works at any hour).
+
+### Fixed
+- **The tests treated Claude's shell as "your terminal"** when run inside Claude Code. The helper now simulates your own terminal explicitly.
+
+### Tests
+- 63 tests (was 60).
+
 ## 1.1.5
 
 Found by a second independent code review; the first two were reproduced before they were fixed.

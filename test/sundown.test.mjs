@@ -54,8 +54,12 @@ function hook(w, name, input, nowIso) {
 
 // Run bin/sundown like a person would. The default fake time, 15:00, is mid-afternoon, so Sundown is not active.
 function cli(w, args, nowIso = "2026-10-29T15:00:00") {
+  // Remove CLAUDECODE so this helper is always "you in your own terminal", even when the tests run
+  // inside Claude Code (which sets it). Tests that need Claude's shell use cliAs("claude", ...).
+  const env = { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: nowIso, CLAUDE_CONFIG_DIR: w.claude };
+  delete env.CLAUDECODE;
   const r = spawnSync("node", [BIN, ...args], {
-    env: { ...process.env, SUNDOWN_DIR: w.state, SUNDOWN_NOW: nowIso, CLAUDE_CONFIG_DIR: w.claude },
+    env,
     encoding: "utf8",
   });
   return { code: r.status, out: r.stdout, err: r.stderr };
@@ -550,8 +554,9 @@ test("cli: daysOff accepts day names and rejects nonsense", () => {
 
 // Protects the wrap-up heads-up: one short note before the cutoff, only once per day, shown to the user and told to Claude, and it can be turned off.
 test("wrap-up: one note shortly before the cutoff, once a day, to you and to Claude", () => {
-  const w = world();
-  // 20:00 is 60 minutes before the cutoff, outside the default 20-minute window, so no note.
+  // The note is opt-in (wrapUpMinutes defaults to 0), so this world turns it on with a 30-minute window.
+  const w = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 30 });
+  // 20:00 is 60 minutes before the cutoff, outside the 30-minute window, so no note.
   assert.equal(hook(w, "gate.mjs", { prompt: "a" }, "2026-10-29T20:00:00").out, ""); // 60 min left: nothing
   // 20:40 is 20 minutes before 21:00, inside the window.
   const first = hook(w, "gate.mjs", { prompt: "b" }, "2026-10-29T20:40:00");
@@ -825,7 +830,10 @@ test("cli: while Sundown is on, Claude can't loosen it; before the cutoff and in
   // Config on disk is unchanged.
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.state, "config.json"), "utf8")).cutoff, "21:00");
   assert.equal(cliAs("you", w, ["config", "overrideMinutes", "30"], night).code, 0);          // your terminal
-  assert.equal(cliAs("claude", w, ["config", "cutoff", "22:00"], "2026-10-29T15:00:00").code, 0); // setup, daytime
+  // In the daytime Claude can't make the cutoff later either (22:00 is looser than 21:00)...
+  assert.equal(cliAs("claude", w, ["config", "cutoff", "22:00"], "2026-10-29T15:00:00").code, 1);
+  // ...but it can make it earlier, which only tightens.
+  assert.equal(cliAs("claude", w, ["config", "cutoff", "20:00"], "2026-10-29T15:00:00").code, 0);
   assert.equal(cliAs("claude", w, ["config", "pushDetail", "folder"], night).code, 0);          // not a loosening setting
 });
 
@@ -851,8 +859,9 @@ test("cli: config needs a value and shows what you typed when it's wrong", () =>
 
 // Protects the status bar: it shows "time to wrap up" in the same window as the wrap-up note, and not when that is off.
 test("cli: the status bar follows wrapUpMinutes", () => {
-  const w = world();
-  // 20:45 is 15 minutes before the cutoff, inside the default 20-minute window.
+  // Opt in with the usual 30-minute window.
+  const w = world({ cutoff: "21:00", morning: "08:00", wrapUpMinutes: 30 });
+  // 20:45 is 15 minutes before the cutoff, inside the 30-minute window.
   assert.match(cli(w, ["statusline"], "2026-10-29T20:45:00").out, /time to wrap up/);
   // Change the window to 10 minutes.
   cli(w, ["config", "wrapUpMinutes", "10"], "2026-10-29T15:00:00");
@@ -1193,4 +1202,58 @@ test("pause: tail only takes a few explicit flags", () => {
   for (const bad of ["tail -f app.log", "tail --fol app.log", "tail --follow app.log"]) {
     assert.equal(JSON.parse(bash(bad)).hookSpecificOutput.permissionDecision, "deny", bad);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Fixes after the second review round, part 2 (1.1.6)
+// ---------------------------------------------------------------------------
+
+// Protects first-time setup: with nothing set yet, Claude must be able to choose a morning, days off and a cutoff at any hour.
+test("cli: first-time setup by Claude works at any hour, because nothing is being loosened", () => {
+  // A brand new install: no cutoff, default morning, no days off.
+  const w = world({});
+  // Try the same setup at midday and late at night.
+  for (const now of ["2026-10-29T12:00:00", "2026-10-29T23:00:00"]) {
+    // Start each hour from a clean config.
+    fs.writeFileSync(path.join(w.state, "config.json"), "{}");
+    // Earlier morning, a day off, then the cutoff last, exactly as the setup skill does it.
+    for (const args of [["config", "morning", "07:30"], ["config", "daysOff", "sat,sun"], ["config", "cutoff", "21:00"]]) {
+      // Each step must be accepted (exit code 0).
+      assert.equal(asClaude(w, args, now).code, 0, `${args.join(" ")} at ${now}`);
+    }
+  }
+});
+
+// Protects the schedule in the daytime: Claude can't weaken an existing cutoff, morning or days off even when Sundown is off.
+test("cli: in the daytime Claude still can't loosen an existing schedule", () => {
+  // 21:00 cutoff, 08:00 morning, weekend off.
+  const w = world({ cutoff: "21:00", morning: "08:00", daysOff: "sat,sun" });
+  // 15:00 on a Thursday: Sundown is off.
+  const day = "2026-10-29T15:00:00";
+  // Each of these makes every later evening or day off looser, so each must be refused.
+  for (const args of [["config", "cutoff", "off"], ["config", "cutoff", "23:00"], ["config", "morning", "06:00"], ["config", "daysOff", "sat"], ["config", "daysOff", "off"]]) {
+    // Exit code 1 means refused.
+    assert.equal(asClaude(w, args, day).code, 1, args.join(" "));
+  }
+  // Tightening is fine: earlier cutoff, later morning, more days off.
+  for (const args of [["config", "cutoff", "20:00"], ["config", "morning", "09:00"], ["config", "daysOff", "fri,sat,sun"]]) {
+    // Exit code 0 means accepted.
+    assert.equal(asClaude(w, args, day).code, 0, args.join(" "));
+  }
+  // And you, in your own terminal, can change anything.
+  assert.equal(cliAs("you", w, ["config", "cutoff", "off"], day).code, 0);
+});
+
+// Protects "no alerts by default": a fresh install shows no wrap-up note and no wrap-up status text.
+test("wrap-up: it is off by default and only appears when you turn it on", () => {
+  // Default settings apart from the cutoff.
+  const w = world({ cutoff: "21:00", morning: "08:00" });
+  // 20:45 is 15 minutes before the cutoff: nothing is printed by the gate.
+  assert.equal(hook(w, "gate.mjs", { prompt: "a" }, "2026-10-29T20:45:00").out, "");
+  // The status line shows the plain countdown, with no wrap-up text.
+  assert.doesNotMatch(cli(w, ["statusline"], "2026-10-29T20:45:00").out, /wrap up/);
+  // Turn it on (you, in your terminal) and the note appears.
+  cli(w, ["config", "wrapUpMinutes", "30"]);
+  // Now the gate prints the note.
+  assert.match(hook(w, "gate.mjs", { prompt: "b" }, "2026-10-29T20:45:00").out, /time to land|cutoff/);
 });
