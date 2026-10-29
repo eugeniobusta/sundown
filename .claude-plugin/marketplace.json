@@ -8,7 +8,7 @@
     {
       "name": "sundown",
       "source": "./",
-      "description": "Stops 'one more prompt' after your cutoff, pauses agents at shutdown, and leaves tomorrow's first step in TOMORROW.md."
+      "description": "Stops 'one more prompt' after your cutoff, pauses agents at shutdown, and leaves tomorrow's first step in TOMORROW.md and a proposed memory tidy-up (a dream) in DREAM.md."
     }
   ]
 }

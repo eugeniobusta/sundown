@@ -11,9 +11,9 @@ allowed-tools: Bash(sundown *)
 
 Set Sundown up with the user. Ask before changing anything, one step at a time, and keep each message short.
 
-Order matters: ask the questions in the order below, but apply the cutoff **last** (step 6), after morning and days off. Setting the cutoff can switch Sundown on straight away when it's already evening, and while it's on, settings that would loosen it can only be changed by the user. If any `sundown config` command answers "only you can change", don't retry it or look for another way: show the user the exact command it printed and ask them to run it in their own terminal.
+Order matters: ask the questions in the order below, but apply the cutoff **last** (step 7), after morning and days off. Setting the cutoff can switch Sundown on straight away when it's already evening, and while it's on, settings that would loosen it can only be changed by the user. If any `sundown config` command answers "only you can change", don't retry it or look for another way: show the user the exact command it printed and ask them to run it in their own terminal.
 
-1. **Evening cutoff.** Ask what time they want to stop working in the evening (24-hour, e.g. 21:00; it applies every day), or "none" to only use /sundown:shutdown by hand. Remember the answer; you'll apply it in step 6.
+1. **Evening cutoff.** Ask what time they want to stop working in the evening (24-hour, e.g. 21:00; it applies every day), or "none" to only use /sundown:shutdown by hand. Remember the answer; you'll apply it in step 7.
 2. **Morning.** Ask when their day starts (default 08:00). Run `sundown config morning <HH:MM>`.
 3. **Days off (optional).** Ask if there are whole days Sundown should keep quiet, for example the weekend. If yes, run `sundown config daysOff <days>` with three-letter names separated by commas (e.g. `sat,sun`). Then offer, as an option and not as a default, a one-line heads-up shortly before the cutoff ("time to wrap up", once a day). Only if they want it, run `sundown config wrapUpMinutes 30` (or the number of minutes they choose).
 4. **Phone notifications (optional).** Explain in one sentence: when Claude finishes a long task or needs an answer, their phone buzzes, so they can leave the desk instead of watching the terminal. It uses ntfy.sh (free, no account; the app is "ntfy" on iOS and Android). If they want it:
@@ -22,8 +22,9 @@ Order matters: ask the questions in the order below, but apply the cutoff **last
    - when they say they've subscribed, run `sundown test-push` and ask if it arrived.
    By default the notification text never mentions the project. If they want the project folder name included, run `sundown config pushDetail folder`.
 5. **Status line (optional).** Offer to show the countdown ("☀ 2h 05m to sundown") at the bottom of Claude Code. This edits their ~/.claude/settings.json, so ask first. If yes, run `sundown install-statusline`. If it says a status line already exists, tell them and don't use --force unless they explicitly say to replace theirs.
-6. **Apply the cutoff.** Now run `sundown config cutoff <HH:MM>` (or `sundown config cutoff off`) with the time from step 1.
-7. Finish with `sundown status` and a two-line summary: what happens at their cutoff, and that `/sundown:shutdown` ends the day early, `override:` sends one message anyway, and `/sundown:wake` switches it off.
+6. **Dream (optional).** Explain in two sentences: when they run `/sundown:shutdown`, Claude also reads its memory of their project and writes `DREAM.md`, a proposed tidy-up (duplicates merged, stale notes replaced, new lessons added). Nothing changes until they run `/sundown:dream apply` the next day. It is off by default and only an option: ask whether they want it, and only if they say yes run `sundown config dream on`. If they also want to steer it (for example "focus on coding-style preferences"), run `sundown config dreamInstructions "<their words>"`.
+7. **Apply the cutoff.** Now run `sundown config cutoff <HH:MM>` (or `sundown config cutoff off`) with the time from step 1.
+8. Finish with `sundown status` and a two-line summary: what happens at their cutoff, and that `/sundown:shutdown` ends the day early, `override:` sends one message anyway, and `/sundown:wake` switches it off.
 
 If Sundown is on right now (the status above says so), the user's own replies to your questions are held back by the evening gate like any other message. Say once, at the start: "Sundown is on, so please start each answer with `override:` (or run setup in the daytime)."
 

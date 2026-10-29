@@ -38,7 +38,12 @@ export const DEFAULTS = Object.freeze({
   overrideMinutes: 20,      // how long one "override:" lets that session work
   daysOff: "",              // whole days Sundown keeps quiet, e.g. "sat,sun". "" = none
   wrapUpMinutes: 0,         // optional: one gentle "time to wrap up" note this many minutes before the cutoff. 0 = off (no alerts by default)
+  dream: "off",             // opt-in: "on" = /sundown:shutdown also writes DREAM.md, a proposal to tidy Claude's memory (never applied automatically); "off" = no dream (no extra work at shutdown by default)
+  dreamInstructions: "",    // optional steering for the dream, e.g. "focus on coding-style preferences". "" = none
 });
+
+// The file a dream is written to: in the project root, next to TOMORROW.md.
+export const DREAM_FILE = "DREAM.md";
 
 // Day names as used in daysOff, indexed like Date.getDay() (0 = Sunday).
 // Order matters: getDay() returns 0 for Sunday, so DAY_NAMES[date.getDay()] is the name.
@@ -79,6 +84,11 @@ const VALID = {
   },
   // A whole number from 0 (off) to 120 minutes.
   wrapUpMinutes: (v) => Number.isInteger(v) && v >= 0 && v <= 120,
+  // Only the two documented modes.
+  dream: (v) => v === "on" || v === "off",
+  // Plain one-line text of at most 1000 characters. Control characters (newlines included) are refused,
+  // so the text can't break out of the one line it is quoted on when it is handed to Claude.
+  dreamInstructions: (v) => typeof v === "string" && v.length <= 1000 && !/[\u0000-\u001f\u007f]/.test(v),
 };
 
 // True only for known keys. hasOwnProperty stops names like "constructor" or
